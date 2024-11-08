@@ -25,7 +25,14 @@ from requests.utils import requote_uri
 from sklearn.preprocessing import StandardScaler
 from matplotlib.ticker import FormatStrFormatter
 
-apikey='deb84eb89cd5f862f8f3216ea4d44719'
+import os
+
+# Get the API key from the environment variable
+apikey = os.getenv('FMP_API_KEY')
+
+# Check if the API key is set
+if not apikey:
+    raise ValueError("API key not found. Please set the environment variable 'FMP_API_KEY'.")
 
 
 #-----------------------------------------------------  
