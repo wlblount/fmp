@@ -7,6 +7,8 @@ import bt
 import ffn
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('TkAgg')  # Set the backend to TkAgg
 import matplotlib.pyplot as plt
 import datetime as dt
 import json
