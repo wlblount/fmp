@@ -1,3 +1,5 @@
+#version 1.0.0  updated 11/11/2024  9:42AM
+
 #     https://financialmodelingprep.com/developer/docs
 from tvDatafeed import TvDatafeed, Interval   # from https://github.com/rongardF/tvdatafeed
 import time
