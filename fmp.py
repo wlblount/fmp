@@ -2386,6 +2386,7 @@ def fmp_isActive(syms):
     # Ensure syms is a list, even if a single string is provided
     if isinstance(syms, str):
         syms = [syms]
+	    print(sym, status)
 
     for sym in syms:
         status = fmp_profF(sym).get('isActivelyTrading')
