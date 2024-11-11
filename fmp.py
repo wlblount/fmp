@@ -1,4 +1,5 @@
-#  version 1.0.0  11/11/2024  9:43AM
+
+
 
 #     https://financialmodelingprep.com/developer/docs
 from tvDatafeed import TvDatafeed, Interval   # from https://github.com/rongardF/tvdatafeed
@@ -2388,7 +2389,6 @@ def fmp_isActive(syms):
     # Ensure syms is a list, even if a single string is provided
     if isinstance(syms, str):
         syms = [syms]
-	    print(sym, status)
 
     for sym in syms:
         status = fmp_profF(sym).get('isActivelyTrading')
