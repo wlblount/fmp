@@ -20,7 +20,7 @@ import json
 import re
 import logging
 logging.captureWarnings(True)
-
+from collections import defaultdict
 from urllib.request import urlopen
 from urllib.parse import urlencode
 import requests   
@@ -29,6 +29,7 @@ from tqdm import notebook, tqdm    #ex: for i in notebook.tqdm(range(1,100000000
 from requests.utils import requote_uri
 from sklearn.preprocessing import StandardScaler
 from matplotlib.ticker import FormatStrFormatter
+from IPython.display import Markdown, display
 
 import os
 
@@ -473,7 +474,6 @@ def fmp_screen(**kwargs):
     Uses the Financial Modeling Prep Screen API to filter companies based on criteria.
 
     Parameters:
-        api_key (str): Your API key for Financial Modeling Prep.
         sector (str, optional): Sector to filter by.
         industry (str, optional): Industry to filter by.
         country (str, optional): Country to filter by.
@@ -483,167 +483,191 @@ def fmp_screen(**kwargs):
     Sectors and Industries
     
     Basic Materials:
-    
-    
-    Other Industrial Metals & Mining
-    Specialty Chemicals
-    Paper & Paper Products
-    Agricultural Inputs
-    Copper
-    Gold
-    Steel
-    Chemicals
-    Building Materials
-    
-    Communication Services:
-    
-    
-    Internet Content & Information
-    Telecom Services
-    Entertainment
-    Electronic Gaming & Multimedia
-    Publishing
-    Advertising Agencies
-    
-    Consumer Cyclical:
-    
-    
-    Internet Retail
-    Auto Manufacturers
-    Luxury Goods
-    Home Improvement Retail
-    Restaurants
-    Footwear & Accessories
-    Travel Services
-    Apparel Retail
-    Specialty Retail
-    Entertainment
-    Lodging
-    Resorts & Casinos
-    Auto & Truck Dealerships
-    Auto Parts
-    Residential Construction
-    Packaging & Containers
-    Personal Services
-    
-    Consumer Defensive:
-    
-    
-    Discount Stores
-    Household & Personal Products
-    Beverages—Non-Alcoholic
-    Beverages—Brewers
-    Tobacco
-    Beverages—Wineries & Distilleries
-    Confectioners
-    Packaged Foods
-    Farm Products
-    Grocery Stores
-    Food Distribution
-    
-    Energy:
-    
-    
-    Oil & Gas Integrated
-    Oil & Gas E&P
-    Oil & Gas Midstream
-    Oil & Gas Equipment & Services
-    Oil & Gas Refining & Marketing
-    
-    Financial Services:
-    
-    
-    Banks—Diversified
-    Insurance—Diversified
-    Credit Services
-    Banks—Regional
-    Capital Markets
-    Financial Data & Stock Exchanges
-    Asset Management
-    Insurance—Property & Casualty
-    Insurance Brokers
-    Insurance
-    Insurance—Life
-    Insurance—Reinsurance
-    Shell Companies
-    Mortgage Finance
-    
-    Healthcare:
-    
-    
-    Diagnostics & Research
-    Drug Manufacturers—General
-    Healthcare Plans
-    Biotechnology
-    Medical Devices
-    Medical Instruments & Supplies
-    Drug Manufacturers—Specialty & Generic
-    Medical Care Facilities
-    Medical Distribution
-    Pharmaceutical Retailers
-    Health Information Services
-    
-    Industrials:
-    
-    
-    Integrated Freight & Logistics
-    Specialty Industrial Machinery
-    Aerospace & Defense
-    Conglomerates
-    Railroads
-    Farm & Heavy Construction Machinery
-    Staffing & Employment Services
-    Specialty Business Services
-    Waste Management
-    Electrical Equipment & Parts
-    Engineering & Construction
-    Rental & Leasing Services
-    None
-    Building Products & Equipment
-    Trucking
-    Industrial Distribution
-    Consulting Services
-    Infrastructure Operations
-    Airports & Air Services
-    Airlines
-    
-    Real Estate:
-    
-    
-    REIT—Industrial
-    REIT—Specialty
-    REIT—Retail
-    REIT—Healthcare Facilities
-    REIT—Diversified
-    Real Estate Services
-    REIT—Office
-    REIT—Residential
-    
-    Technology:
-    
-    
-    Consumer Electronics
-    Software—Infrastructure
-    Semiconductors
-    Semiconductor Equipment & Materials
-    Communication Equipment
-    Software—Application
-    Information Technology Services
-    Computer Hardware
-    Electronic Components
-    Scientific & Technical Instruments
-    Solar
-    Telecom Services - Foreign
-    
-    Utilities:
-    
-    
-    Utilities—Regulated Electric
-    Utilities—Diversified
-    Utilities—Regulated Gas
-    Utilities—Regulated Water
-    Utilities—Renewable
-    Utilities Regulated
+
+Agricultural Inputs
+Aluminum
+Chemicals
+Chemicals - Specialty
+Construction Materials
+Copper
+Gold
+Industrial Materials
+Other Precious Metals
+Paper, Lumber & Forest Products
+Silver
+Steel
+
+Communication Services:
+
+Advertising Agencies
+Broadcasting
+Entertainment
+Internet Content & Information
+Publishing
+Telecommunications Services
+
+Consumer Cyclical:
+
+Apparel - Footwear & Accessories
+Apparel - Manufacturers
+Apparel - Retail
+Auto - Dealerships
+Auto - Manufacturers
+Auto - Parts
+Auto - Recreational Vehicles
+Department Stores
+Furnishings, Fixtures & Appliances
+Gambling, Resorts & Casinos
+Home Improvement
+Leisure
+Luxury Goods
+Packaging & Containers
+Personal Products & Services
+Residential Construction
+Restaurants
+Specialty Retail
+Travel Lodging
+Travel Services
+
+Consumer Defensive:
+
+Agricultural Farm Products
+Beverages - Alcoholic
+Beverages - Non-Alcoholic
+Beverages - Wineries & Distilleries
+Discount Stores
+Education & Training Services
+Food Confectioners
+Food Distribution
+Grocery Stores
+Household & Personal Products
+Packaged Foods
+Tobacco
+
+Energy:
+
+Coal
+Energy
+Oil & Gas Drilling
+Oil & Gas Equipment & Services
+Oil & Gas Exploration & Production
+Oil & Gas Integrated
+Oil & Gas Midstream
+Oil & Gas Refining & Marketing
+Solar
+Uranium
+
+Financial Services:
+
+Asset Management
+Asset Management - Bonds
+Asset Management - Cryptocurrency
+Asset Management - Global
+Asset Management - Income
+Asset Management - Leveraged
+Banks
+Banks - Diversified
+Banks - Regional
+Financial - Capital Markets
+Financial - Conglomerates
+Financial - Credit Services
+Financial - Data & Stock Exchanges
+Financial - Mortgages
+Insurance - Brokers
+Insurance - Diversified
+Insurance - Life
+Insurance - Property & Casualty
+Insurance - Reinsurance
+Insurance - Specialty
+Investment - Banking & Investment Services
+Shell Companies
+
+Healthcare:
+
+Biotechnology
+Drug Manufacturers - General
+Drug Manufacturers - Specialty & Generic
+Healthcare
+Medical - Care Facilities
+Medical - Devices
+Medical - Diagnostics & Research
+Medical - Distribution
+Medical - Equipment & Services
+Medical - Healthcare Information Services
+Medical - Healthcare Plans
+Medical - Instruments & Supplies
+Medical - Pharmaceuticals
+Medical - Specialties
+
+Industrials:
+
+Aerospace & Defense
+Agricultural - Machinery
+Air Freight/Couriers
+Airlines, Airports & Air Services
+Business Equipment & Supplies
+Conglomerates
+Construction
+Consulting Services
+Electrical Equipment & Parts
+Engineering & Construction
+Industrial - Distribution
+Industrial - Infrastructure Operations
+Industrial - Machinery
+Industrial - Pollution & Treatment Controls
+Integrated Freight & Logistics
+Manufacturing - Metal Fabrication
+Manufacturing - Miscellaneous
+Manufacturing - Tools & Accessories
+Marine Shipping
+Railroads
+Rental & Leasing Services
+Security & Protection Services
+Specialty Business Services
+Staffing & Employment Services
+Trucking
+Waste Management
+Wholesale Distributors
+
+Real Estate:
+
+REIT - Diversified
+REIT - Healthcare Facilities
+REIT - Hotel & Motel
+REIT - Industrial
+REIT - Mortgage
+REIT - Office
+REIT - Residential
+REIT - Retail
+REIT - Specialty
+Real Estate - Development
+Real Estate - Diversified
+Real Estate - General
+Real Estate - Services
+
+Technology:
+
+Communication Equipment
+Computer Hardware
+Consumer Electronics
+Electronic Gaming & Multimedia
+Hardware, Equipment & Parts
+Information Technology Services
+Internet Software/Services
+Semiconductors
+Software - Application
+Software - Infrastructure
+Software - Services
+Technology Distributors
+
+Utilities:
+
+Diversified Utilities
+Independent Power Producers
+Regulated Electric
+Regulated Gas
+Regulated Water
+Renewable Utilities
     
     	Country:  'US', 'CN', 'TW', 'FR', 'CH', 'NL', 'CA', 'JP', 'DK', 'IE', 'AU',
            'GB', 'DE', 'SG', 'BE', 'IN', 'BR', 'ZA', 'AR', 'ES', 'NO', 'HK',
@@ -1666,25 +1690,44 @@ Returns:
 
 
 #---------------------------------------------------------------
+def get_sectors():
+    """Retrieve the list of sectors using FMP API."""
+    url = f"https://financialmodelingprep.com/api/v3/sectors-list?apikey={apikey}"
+    response = requests.get(url)
+    return response.json()
+
+def get_industries_by_sector(sector):
+    """Retrieve the list of industries for a given sector using FMP API."""
+    url = f"https://financialmodelingprep.com/api/v3/stock-screener?sector={sector}&apikey={apikey}"
+    response = requests.get(url)
+    data = response.json()
+    
+    # Extract unique industries from the response
+    industries = {item['industry'] for item in data if 'industry' in item}
+    return sorted(industries)  # Alphabetize industries
+
+def build_sector_industry_map():
+    """Build a complete dictionary mapping sectors to industries."""
+    sectors = get_sectors()
+    sector_industry_map = defaultdict(list)
+
+    # Loop through each sector and fetch its industries
+    for sector in sectors:
+        industries = get_industries_by_sector(sector)
+        sector_industry_map[sector] = industries
+
+    return sector_industry_map
+
 def fmp_sectInd():
-    '''
-Prints a Sector - Industry listing to the screen
-    '''
-    df=fmp_screen()
-    from IPython.display import Markdown
+    """Display the sector-industry mapping in Markdown format with alphabetical order."""
+    sector_industry_map = build_sector_industry_map()
 
-
-    for sector, group in df.groupby('sector'):
+    # Print each sector and its industries using Markdown formatting
+    for sector, industries in sector_industry_map.items():
         display(Markdown(f"**{sector}:**"))
-        print()
-        # get the unique values of 'industry' for the current sector
-        industries = group['industry'].unique()
-        # # print out the list of industries
         for industry in industries:
-            print(industry)
-        print()
-        
-#-------------------------------------------------------------------
+            display(Markdown(f"- {industry}"))
+
 
 #----------------------------------------------------------------------------------------
 def fmp_plotMult(sym = 'COIN', start=utils.ddelt(504)):
