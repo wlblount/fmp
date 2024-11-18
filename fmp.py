@@ -1,6 +1,10 @@
-#version 1.0.0  updated 11/11/2024  9:42AM
+#version 1.0.3  updated 11/18/2024  6:52AM
+#modified fmp_screen() function, should be fully functioining now
+    ##TO DO - explore if all financial factors work (bal sheet items, income, items, metrics???
+    ##      - explore 'requote_uri'
 
 #     https://financialmodelingprep.com/developer/docs
+
 from tvDatafeed import TvDatafeed, Interval   # from https://github.com/rongardF/tvdatafeed
 import time
 import utils
@@ -11,16 +15,15 @@ import pandas as pd
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
+import datetime as dt
 import json
 import re
 import logging
 logging.captureWarnings(True)
-try:
-    # For Python 3.0 and later
-    from urllib.request import urlopen
-except ImportError:
-    # Fall back to Python 2's urllib2
-    from urllib2 import urlopen   
+
+from urllib.request import urlopen
+from urllib.parse import urlencode
+import requests   
 from datetime import datetime 
 from tqdm import notebook, tqdm    #ex: for i in notebook.tqdm(range(1,100000000)):earn
 from requests.utils import requote_uri
@@ -51,7 +54,7 @@ def fmp_price(syms, start='1960-01-01', end=str(dt.datetime.now().date()), facs=
     
     
    
-    url=requote_uri('https://financialmodelingprep.com/api/v3/historical-price-full/'+syms+'?from='+start+'&to='+end+'&apikey='+apikey)
+    url=requote_uri(f'https://financialmodelingprep.com/api/v3/historical-price-full/{syms}?from={start}&to={end}&apikey={apikey}')
     response = urlopen(url, cafile=certifi.where())
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
@@ -464,223 +467,250 @@ def fmp_mergarb(syms, shar_fact=1, cash=0, start='1960-01-01', per=True):
 	
 #---------------------------------------------------------------------
 
+
 def fmp_screen(**kwargs):
+    """
+    Uses the Financial Modeling Prep Screen API to filter companies based on criteria.
 
-    '''
-ex:  fmp_screen(county='US', marketCapMoreThan='1000000000 ', industry='Insurance—Life')
-
-Parameters:
-	
-MoreThan, LowerThan
-	
-marketCap, price, beta, volume, dividend, isEtf, isActivelyTrading
+    Parameters:
+        api_key (str): Your API key for Financial Modeling Prep.
+        sector (str, optional): Sector to filter by.
+        industry (str, optional): Industry to filter by.
+        country (str, optional): Country to filter by.
+            
+    ex:  fmp_screen(county='US', marketCapMoreThan='1000000000 ', industry='Insurance—Life')
+        
+    Sectors and Industries
     
-Sectors and Industries
+    Basic Materials:
+    
+    
+    Other Industrial Metals & Mining
+    Specialty Chemicals
+    Paper & Paper Products
+    Agricultural Inputs
+    Copper
+    Gold
+    Steel
+    Chemicals
+    Building Materials
+    
+    Communication Services:
+    
+    
+    Internet Content & Information
+    Telecom Services
+    Entertainment
+    Electronic Gaming & Multimedia
+    Publishing
+    Advertising Agencies
+    
+    Consumer Cyclical:
+    
+    
+    Internet Retail
+    Auto Manufacturers
+    Luxury Goods
+    Home Improvement Retail
+    Restaurants
+    Footwear & Accessories
+    Travel Services
+    Apparel Retail
+    Specialty Retail
+    Entertainment
+    Lodging
+    Resorts & Casinos
+    Auto & Truck Dealerships
+    Auto Parts
+    Residential Construction
+    Packaging & Containers
+    Personal Services
+    
+    Consumer Defensive:
+    
+    
+    Discount Stores
+    Household & Personal Products
+    Beverages—Non-Alcoholic
+    Beverages—Brewers
+    Tobacco
+    Beverages—Wineries & Distilleries
+    Confectioners
+    Packaged Foods
+    Farm Products
+    Grocery Stores
+    Food Distribution
+    
+    Energy:
+    
+    
+    Oil & Gas Integrated
+    Oil & Gas E&P
+    Oil & Gas Midstream
+    Oil & Gas Equipment & Services
+    Oil & Gas Refining & Marketing
+    
+    Financial Services:
+    
+    
+    Banks—Diversified
+    Insurance—Diversified
+    Credit Services
+    Banks—Regional
+    Capital Markets
+    Financial Data & Stock Exchanges
+    Asset Management
+    Insurance—Property & Casualty
+    Insurance Brokers
+    Insurance
+    Insurance—Life
+    Insurance—Reinsurance
+    Shell Companies
+    Mortgage Finance
+    
+    Healthcare:
+    
+    
+    Diagnostics & Research
+    Drug Manufacturers—General
+    Healthcare Plans
+    Biotechnology
+    Medical Devices
+    Medical Instruments & Supplies
+    Drug Manufacturers—Specialty & Generic
+    Medical Care Facilities
+    Medical Distribution
+    Pharmaceutical Retailers
+    Health Information Services
+    
+    Industrials:
+    
+    
+    Integrated Freight & Logistics
+    Specialty Industrial Machinery
+    Aerospace & Defense
+    Conglomerates
+    Railroads
+    Farm & Heavy Construction Machinery
+    Staffing & Employment Services
+    Specialty Business Services
+    Waste Management
+    Electrical Equipment & Parts
+    Engineering & Construction
+    Rental & Leasing Services
+    None
+    Building Products & Equipment
+    Trucking
+    Industrial Distribution
+    Consulting Services
+    Infrastructure Operations
+    Airports & Air Services
+    Airlines
+    
+    Real Estate:
+    
+    
+    REIT—Industrial
+    REIT—Specialty
+    REIT—Retail
+    REIT—Healthcare Facilities
+    REIT—Diversified
+    Real Estate Services
+    REIT—Office
+    REIT—Residential
+    
+    Technology:
+    
+    
+    Consumer Electronics
+    Software—Infrastructure
+    Semiconductors
+    Semiconductor Equipment & Materials
+    Communication Equipment
+    Software—Application
+    Information Technology Services
+    Computer Hardware
+    Electronic Components
+    Scientific & Technical Instruments
+    Solar
+    Telecom Services - Foreign
+    
+    Utilities:
+    
+    
+    Utilities—Regulated Electric
+    Utilities—Diversified
+    Utilities—Regulated Gas
+    Utilities—Regulated Water
+    Utilities—Renewable
+    Utilities Regulated
+    
+    	Country:  'US', 'CN', 'TW', 'FR', 'CH', 'NL', 'CA', 'JP', 'DK', 'IE', 'AU',
+           'GB', 'DE', 'SG', 'BE', 'IN', 'BR', 'ZA', 'AR', 'ES', 'NO', 'HK',
+           'IT', 'MX', 'BM', 'LU', 'SE', 'FI', 'CO', 'KR', 'ID', 'JE', 'IL',
+           'PT', 'UY', 'CL', 'MC', 'CY', 'MA', 'KY', 'RU', 'PR', 'PH', 'IS',
+           'TR', 'IM', 'TH', 'PA', 'PE', 'GG', 'Peru', 'AE', 'NZ', 'GR', 'CR',
+           'MY', 'BB', 'BS', 'GA', 'JO', 'VG', 'DO', 'ZM', 'MT', 'CK', 'MN',
+           'LT', 'MO', 'AI'
+           
+    
+        Returns:
+            pd.DataFrame: A DataFrame with the filtered companies.
+        """
 
-Basic Materials:
+    base_url = f"https://financialmodelingprep.com/api/v3/stock-screener"
+    
+    # Build query parameters dynamically based on provided filters
+    params = {
+        "apikey": apikey,
+        "sector": kwargs.get("sector"),
+        "industry": kwargs.get("industry"),
+        "country": kwargs.get("country")
+    }
+    
+    # Remove any parameters that are None
+    params = {k: v for k, v in params.items() if v is not None}
+    
+    # Make the API request with the dynamic parameters
+    response = requests.get(base_url, params=params)
+    
+    # Check if the request was successful
+    if response.status_code != 200:
+        print("Failed to retrieve data. Check your API key and internet connection.")
+        return []
+    
+    data = response.json()
+    
+    if not data:
+        print("No data fetched from the API with the provided filters.")
+        return []
+    
+    print(f"Found {len(data)} stocks:")
+    # Create DataFrame
+    df = pd.DataFrame([ 
+        [sub['symbol'], sub['companyName'], sub['sector'], sub['industry'], sub['country'], sub['marketCap'], sub['exchangeShortName']] 
+        for sub in data
+    ], columns=['symbol', 'companyName', 'sector', 'industry', 'country', 'marketCap', 'exchange'])
 
+    # Convert market cap to millions without formatting it as a string initially
+    df['marketCap(mil)'] = (df['marketCap'] / 1000000).round(0)
 
-Other Industrial Metals & Mining
-Specialty Chemicals
-Paper & Paper Products
-Agricultural Inputs
-Copper
-Gold
-Steel
-Chemicals
-Building Materials
+    # Sort by 'marketCap(mil)' in descending order while it is still numeric
+    df.sort_values('marketCap(mil)', ascending=False, inplace=True)
 
-Communication Services:
+    # Now format 'marketCap(mil)' with commas
+    #df['marketCap(mil)'] = df['marketCap(mil)'].apply(lambda x: f"{int(x):,}")
+    df['marketCap(mil)'] = df['marketCap(mil)'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
 
-
-Internet Content & Information
-Telecom Services
-Entertainment
-Electronic Gaming & Multimedia
-Publishing
-Advertising Agencies
-
-Consumer Cyclical:
-
-
-Internet Retail
-Auto Manufacturers
-Luxury Goods
-Home Improvement Retail
-Restaurants
-Footwear & Accessories
-Travel Services
-Apparel Retail
-Specialty Retail
-Entertainment
-Lodging
-Resorts & Casinos
-Auto & Truck Dealerships
-Auto Parts
-Residential Construction
-Packaging & Containers
-Personal Services
-
-Consumer Defensive:
-
-
-Discount Stores
-Household & Personal Products
-Beverages—Non-Alcoholic
-Beverages—Brewers
-Tobacco
-Beverages—Wineries & Distilleries
-Confectioners
-Packaged Foods
-Farm Products
-Grocery Stores
-Food Distribution
-
-Energy:
-
-
-Oil & Gas Integrated
-Oil & Gas E&P
-Oil & Gas Midstream
-Oil & Gas Equipment & Services
-Oil & Gas Refining & Marketing
-
-Financial Services:
-
-
-Banks—Diversified
-Insurance—Diversified
-Credit Services
-Banks—Regional
-Capital Markets
-Financial Data & Stock Exchanges
-Asset Management
-Insurance—Property & Casualty
-Insurance Brokers
-Insurance
-Insurance—Life
-Insurance—Reinsurance
-Shell Companies
-Mortgage Finance
-
-Healthcare:
-
-
-Diagnostics & Research
-Drug Manufacturers—General
-Healthcare Plans
-Biotechnology
-Medical Devices
-Medical Instruments & Supplies
-Drug Manufacturers—Specialty & Generic
-Medical Care Facilities
-Medical Distribution
-Pharmaceutical Retailers
-Health Information Services
-
-Industrials:
-
-
-Integrated Freight & Logistics
-Specialty Industrial Machinery
-Aerospace & Defense
-Conglomerates
-Railroads
-Farm & Heavy Construction Machinery
-Staffing & Employment Services
-Specialty Business Services
-Waste Management
-Electrical Equipment & Parts
-Engineering & Construction
-Rental & Leasing Services
-None
-Building Products & Equipment
-Trucking
-Industrial Distribution
-Consulting Services
-Infrastructure Operations
-Airports & Air Services
-Airlines
-
-Real Estate:
-
-
-REIT—Industrial
-REIT—Specialty
-REIT—Retail
-REIT—Healthcare Facilities
-REIT—Diversified
-Real Estate Services
-REIT—Office
-REIT—Residential
-
-Technology:
-
-
-Consumer Electronics
-Software—Infrastructure
-Semiconductors
-Semiconductor Equipment & Materials
-Communication Equipment
-Software—Application
-Information Technology Services
-Computer Hardware
-Electronic Components
-Scientific & Technical Instruments
-Solar
-Telecom Services - Foreign
-
-Utilities:
-
-
-Utilities—Regulated Electric
-Utilities—Diversified
-Utilities—Regulated Gas
-Utilities—Regulated Water
-Utilities—Renewable
-Utilities Regulated
-
-	Country:  'US', 'CN', 'TW', 'FR', 'CH', 'NL', 'CA', 'JP', 'DK', 'IE', 'AU',
-       'GB', 'DE', 'SG', 'BE', 'IN', 'BR', 'ZA', 'AR', 'ES', 'NO', 'HK',
-       'IT', 'MX', 'BM', 'LU', 'SE', 'FI', 'CO', 'KR', 'ID', 'JE', 'IL',
-       'PT', 'UY', 'CL', 'MC', 'CY', 'MA', 'KY', 'RU', 'PR', 'PH', 'IS',
-       'TR', 'IM', 'TH', 'PA', 'PE', 'GG', 'Peru', 'AE', 'NZ', 'GR', 'CR',
-       'MY', 'BB', 'BS', 'GA', 'JO', 'VG', 'DO', 'ZM', 'MT', 'CK', 'MN',
-       'LT', 'MO', 'AI'
-       
-	exchange:  'MCE', 'Johannesburg', 'HKSE', 'NYSEArca', 'BATS Exchange', 'Shanghai', 'Mexico', 
-	   'Milan', 'FGI', 'ASE', 'Shenzhen', 'AMEX', 'Athens', 'TSXV', 'New York Stock Exchange', 'Paris', 
-	   'Lisbon', 'Toronto', 'New York Stock Exchange Arca', 'Oslo', 'NZSE', 'OSL', 'Sao Paolo', 
-	   'EURONEXT', 'MCX', 'Vienna', 'Nasdaq', 'NSE', 'SIX', 'OTC', 'Amsterdam', 'NASDAQ Global Market', 
-	   'Taiwan', 'OSE', 'Nasdaq Capital Market', 'Helsinki', 'Other OTC', 'KSE', 'Santiago', 'Irish', 
-	   'Canadian Sec', 'BATS', 'HKG', 'XETRA', 'NYSE American', 'Brussels', 'LSE', 'ASX', 'NASDAQ', 'YHD', 
-	   'Frankfurt', 'NCM', 'Stockholm', 'Istanbul', 'Copenhagen', 'Nasdaq Global Market', 'Tokyo', 
-	   'Nasdaq Global Select', 'Jakarta', 'KOSDAQ', 'SAT', 'Swiss', 'Hamburg', 'NMS'
-    '''
-	
-	
-	
-
-    a=[i+'=' for i in kwargs.keys()]
-    b=[i for i in kwargs.values()]
-
-    c="".join([m+n+'&' for m,n in zip(a,b)])
-    indsturl=requote_uri('https://financialmodelingprep.com/api/v3/stock-screener?'+c+'apikey='+apikey)
-    response = urlopen(indsturl, cafile=certifi.where())
-    data = response.read().decode("utf-8")
-    stuff=json.loads(data)
-    df = pd.DataFrame([ [sub['symbol'], sub['companyName'], sub['sector'], sub['industry'], sub['country'], 
-                     sub['marketCap'], sub['exchangeShortName']] for sub in stuff ], columns=['symbol', 
-                        'companyName','sector', 'industry', 'country','marketCap', 'exchange'])
-    df['marketCap(mil)'] = (df['marketCap']/1000000).round(2)
-   
-    #df['marketCap(mil)'] = df['marketCap(mil)'].apply(lambda x: f'{x:,.0f}' if x>0 else f'{x:,.2f}'.rstrip('0').rstrip('.'))
+    # Drop the original 'marketCap' column
     df = df.drop('marketCap', axis=1)
 
+    # Set 'symbol' as the index
     df.set_index('symbol', inplace=True)
-    df.sort_values('marketCap(mil)')
-  
-    return df	
+
+    return df
+    
+    
 
 #------------------------------------------------------------
 def fmp_earnSym(sym, n=5):
