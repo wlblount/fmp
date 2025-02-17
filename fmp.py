@@ -1,7 +1,8 @@
-#version 1.0.3  updated 11/18/2024  6:52AM
-#modified fmp_screen() function, should be fully functioining now
-    ##TO DO - explore if all financial factors work (bal sheet items, income, items, metrics???
-    ##      - explore 'requote_uri'
+#version 1.0.5  updated 2/16/25
+
+    ##TO DO - fmp_screen():  explore if all financial factors work (bal sheet items, income, items, metrics???
+    ##      - explore 'requote_uri' in all urls.
+    ##      - look for unneeded imports
 
 #     https://financialmodelingprep.com/developer/docs
 
@@ -25,11 +26,12 @@ from urllib.request import urlopen
 from urllib.parse import urlencode
 import requests   
 from datetime import datetime 
-from tqdm import notebook, tqdm    #ex: for i in notebook.tqdm(range(1,100000000)):earn
+from tqdm import notebook, tqdm    #ex: for i in notebook.tqdm(range(1,100000000)):
 from requests.utils import requote_uri
 from sklearn.preprocessing import StandardScaler
 from matplotlib.ticker import FormatStrFormatter
 from IPython.display import Markdown, display
+import fmpw
 
 import os
 
@@ -112,22 +114,13 @@ def fmp_priceLoop(syms, start='1960-01-01', end=str(dt.datetime.now().date()), f
     if supress:
         for i in syms:
             dff=fmp_price(i, start=start, end=end, facs=[fac])
-            df=pd.concat([df,dff], axis=1)
-            if len(syms)==1:
-                return df.dropna()
-        
+            df[i]=dff
+      
     else:
         for i in notebook.tqdm(syms, disable=False):
             dff=fmp_price(i, start=start, end=end, facs=[fac])
-            df=pd.concat([df,dff], axis=1)
-            print(i)
-            if len(syms)==1:
-                return df.dropna()
-        
-    facs=df.columns.unique()
-    cols=[i for i in syms for j in facs]
-    df.columns=cols
-    print ('fac= ', fac)
+            df[i]=dff
+   
     return df
 
 #-----------------------------------------------------
@@ -187,8 +180,8 @@ outputs: dataframe of marketcap values with a datetime index
     dff = pd.concat([df, dfp], axis=1)
     dff.ffill(inplace=True)
     dff.dropna(inplace=True)
-    dff['mktcap']=(dff.numberOfShares*dff.close) 
-    return dff.mktcap
+    dff['mktCap']=(dff.numberOfShares*dff.close) 
+    return dff.mktCap
 
 #-----------------------------------------------------
 
@@ -310,9 +303,9 @@ def fmp_entts(sym, facs=None, period='quarter'):
     '''
   
     if facs==None:
-        full=['symbol', 'date', 'stockPrice', 'numberOfShares', 
-              'marketCapitalization', 'minusCashAndCashEquivalents', 
-              'addTotalDebt', 'enterpriseValue']	
+        full=['date', 'numberOfShares', 
+              'minusCashAndCashEquivalents', 
+              'addTotalDebt']	
         facs=full
     sym=sym.upper()
     
@@ -853,7 +846,8 @@ def fmp_scaler(df, names=None):
 
 #--------------------------------------------------------
 def fmp_cumret(df):
-    df=df.pct_change().cumsum() 
+    df=df.pct_change()
+    df = (1 + df).cumprod() - 1
     df.iloc[0,:]=0
     return df
 	
@@ -888,7 +882,7 @@ def fmp_efficiency(sym):
 	
 #-----------------------------------------------------------------------------------------
 
-def fmp_div(sym):  
+def fmp_div(sym, num=5):  
     '''
 Declaration Date: This is the date on which the company's board of directors announces 
 the upcoming dividend payment. It signifies the company's intention to pay a dividend.
@@ -932,6 +926,8 @@ currYield:  last dividend x 4
     num = df['dividend'].rolling(window='360D').count()[-1]
 
     newdf['curYield']= np.round(newdf.adjDividend*num/newdf.close*100,2)
+
+    
     return newdf
 
 #---------------------------------------------------------------------------------------	
@@ -1530,30 +1526,43 @@ def fmp_plotFinMult(data, title='Multi-Symbol Chart'):
 ##------------------------------------------------
 
 def fmp_plotBarRetts(data): 
+    """
+    Plots a bar chart of returns over time, converting dates to categorical labels
+    to avoid gaps for non-trading days.
     
-    from matplotlib.dates import AutoDateLocator, DateFormatter
-    from matplotlib import dates as mdates
+    Parameters:
+    -----------
+    data : pandas.DataFrame
+        A DataFrame with a datetime index and a single column of return values.
+    
+    Returns:
+    --------
+    None
+        Displays the plotted bar chart.
+    """
+    # Drop NaN values
+    data = data.dropna()
 
+    # Extract values
+    values = data.iloc[:, 0].to_numpy().flatten()
+    colors = np.where(values >= 0, 'g', 'r')  # Assign green for positive, red for negative
+
+    # Convert dates to string labels (so they are treated as categorical)
+    date_labels = data.index.strftime('%m/%d/%Y')  # Format: MM/DD
+
+    # Create the figure
     fig, ax = plt.subplots(figsize=(10, 5))
-
     ax.grid()
 
-    ax.bar(data.index, data, color=np.where(data>=0, 'g', 'r'))
+    # Use range as x-values to plot without gaps
+    ax.bar(range(len(data)), values, color=colors)
 
-    # set x-ticks every 10 data points
-    # xtick_positions = np.arange(0, len(data), len(data)//5)
-    # xtick_labels = data.index[xtick_positions].strftime('%m/%d')
-    # ax.set_xticks(data.index[xtick_positions])
-
-    # format x-axis as date
-    ax.xaxis.set_major_locator(AutoDateLocator(minticks=20))
-    ax.xaxis.set_major_formatter(DateFormatter('%m/%d/%y'))
-    #ax.xaxis.set_major_locator(mdates.YearLocator())
-    ax.xaxis.set_minor_locator(mdates.DayLocator(interval=5))
-
-    plt.xticks(rotation=45)
+    # Replace x-ticks with date labels
+    ax.set_xticks(range(len(data)))
+    ax.set_xticklabels(date_labels, rotation=45)
 
     plt.show()
+
 #----------------------------------------------------------------
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -2251,58 +2260,6 @@ def fmp_keyMetrics(symbol, facs=['revenuePerShare','netIncomePerShare','operatin
  
 #-------------------------------------------------------------------
 
-def fmp_keyMetricsttm(symbol, facs=['revenuePerShareTTM','netIncomePerShareTTM','operatingCashFlowPerShareTTM',
-           'freeCashFlowPerShareTTM','cashPerShareTTM','bookValuePerShareTTM',
-           'tangibleBookValuePerShareTTM','shareholdersEquityPerShareTTM','interestDebtPerShareTTM',
-           'marketCapTTM', 'enterpriseValueTTM','peRatioTTM','priceToSalesRatioTTM',
-           'pocfratioTTM','pfcfRatioTTM','pbRatioTTM','ptbRatioTTM','evToSalesTTM',
-           'enterpriseValueOverEBITDATTM', 'evToOperatingCashFlowTTM', 'evToFreeCashFlowTTM',
-           'earningsYieldTTM', 'freeCashFlowYieldTTM', 'debtToEquityTTM','debtToAssetsTTM',
-           'netDebtToEBITDATTM', 'currentRatioTTM', 'interestCoverageTTM','incomeQualityTTM',
-           'dividendYieldTTM','dividendYieldPercentageTTM','payoutRatioTTM',
-           'salesGeneralAndAdministrativeToRevenueTTM','researchAndDevelopementToRevenueTTM',
-           'intangiblesToTotalAssetsTTM','capexToOperatingCashFlowTTM',
-           'capexToRevenueTTM','capexToDepreciationTTM','stockBasedCompensationToRevenueTTM',
-           'grahamNumberTTM','roicTTM','returnOnTangibleAssetsTTM','grahamNetNetTTM',
-           'workingCapitalTTM','tangibleAssetValueTTM','netCurrentAssetValueTTM',
-           'investedCapitalTTM','averageReceivablesTTM','averagePayablesTTM',
-           'averageInventoryTTM','daysSalesOutstandingTTM','daysPayablesOutstandingTTM',
-           'daysOfInventoryOnHandTTM','receivablesTurnoverTTM','payablesTurnoverTTM',
-           'inventoryTurnoverTTM','roeTTM','capexPerShareTTM','dividendPerShareTTM',
-           'debtToMarketCapTTM']):
-    '''
-    facs=[['revenuePerShareTTM','netIncomePerShareTTM','operatingCashFlowPerShareTTM',
-           'freeCashFlowPerShareTTM','cashPerShareTTM','bookValuePerShareTTM',
-           'tangibleBookValuePerShareTTM','shareholdersEquityPerShareTTM','interestDebtPerShareTTM',
-           'marketCapTTM', 'enterpriseValueTTM','peRatioTTM','priceToSalesRatioTTM',
-           'pocfratioTTM','pfcfRatioTTM','pbRatioTTM','ptbRatioTTM','evToSalesTTM',
-           'enterpriseValueOverEBITDATTM', 'evToOperatingCashFlowTTM', 'evToFreeCashFlowTTM',
-           'earningsYieldTTM', 'freeCashFlowYieldTTM', 'debtToEquityTTM','debtToAssetsTTM',
-           'netDebtToEBITDATTM', 'currentRatioTTM', 'interestCoverageTTM','incomeQualityTTM',
-           'dividendYieldTTM','dividendYieldPercentageTTM','payoutRatioTTM',
-           'salesGeneralAndAdministrativeToRevenueTTM','researchAndDevelopementToRevenueTTM',
-           'intangiblesToTotalAssetsTTM','capexToOperatingCashFlowTTM',
-           'capexToRevenueTTM','capexToDepreciationTTM','stockBasedCompensationToRevenueTTM',
-           'grahamNumberTTM','roicTTM','returnOnTangibleAssetsTTM','grahamNetNetTTM',
-           'workingCapitalTTM','tangibleAssetValueTTM','netCurrentAssetValueTTM',
-           'investedCapitalTTM','averageReceivablesTTM','averagePayablesTTM',
-           'averageInventoryTTM','daysSalesOutstandingTTM','daysPayablesOutstandingTTM',
-           'daysOfInventoryOnHandTTM','receivablesTurnoverTTM','payablesTurnoverTTM',
-           'inventoryTurnoverTTM','roeTTM','capexPerShareTTM','dividendPerShareTTM',
-           'debtToMarketCapTTM']
-    '''
-    
-  
-    
-    url=f'https://financialmodelingprep.com/api/v3/key-metrics-ttm/{symbol}?period=quarter&apikey={apikey}'
-    response = urlopen(url, cafile=certifi.where())
-    data = response.read().decode("utf-8")
-    stuff = json.loads(data)
-    stuff = stuff[0]
-    
-    
-    return pd.Series({key: value for key, value in stuff.items() if key in facs}).T
-
 
 #-----------------------------------------------------------------------------------------------------
 
@@ -2404,6 +2361,57 @@ def fmp_plotyc():
     return dff
 
 #-------------------------------------------------------------------------------------------------------------------------
+
+def fmp_plotShYield(sym, output='plot', quarters=40):
+    """
+    Compute and visualize the Shareholder Yield (SH Yield) for a given stock symbol.
+    
+    The function retrieves financial data for the specified symbol, calculates the dividend yield,
+    buyback yield, and total shareholder yield, and either plots the data or returns it as a DataFrame.
+    
+    Parameters:
+    sym (str): Stock ticker symbol.
+    output (str, optional): Determines the function output. Default is 'plot'.
+        - 'plot': Displays a plot of the shareholder yield components.
+        - 'df': Returns a DataFrame containing the yield calculations.
+        - 'quarters': is the number of quarters to plot.  Default is 10 years or 40 quarters
+    
+    Returns:
+    None or pd.DataFrame: 
+        - Returns None if output='plot' (displays a plot).
+        - Returns a DataFrame if output='df'.
+    """
+    # Fetch financial data
+    cf = fmp_cashfts(sym, facs=['commonStockIssued', 'commonStockRepurchased', 'dividendsPaid'])
+    cf=cf.rolling(4).sum()
+    mc = fmp_mcap(sym)
+    
+    # Merge data
+    sy = pd.concat([cf, mc], axis=1, join='inner')
+    
+    # Compute yields
+    sy['divYield'] = -sy['dividendsPaid'] / sy['mktCap']
+    sy['bbYield'] = (-sy['commonStockRepurchased'] - sy['commonStockIssued']) / sy['mktCap']
+    sy['shYield'] = np.round((-sy['dividendsPaid'] - sy['commonStockRepurchased'] - sy['commonStockIssued']) / sy['mktCap'], 4)
+    
+    if output == 'df':
+        return sy
+    sy=sy[-quarters:]    
+    
+    # Plot the shareholder yield components
+    plt.figure(figsize=(10, 6))
+    plt.plot(sy.index, sy['divYield'], label='Dividend Yield', color='blue')
+    plt.plot(sy.index, sy['divYield'] + sy['bbYield'], label='Shareholder Yield', color='green')
+    plt.fill_between(sy.index, sy['divYield'], sy['divYield'] + sy['bbYield'], color='green', alpha=0.5)
+    plt.fill_between(sy.index, 0, sy['divYield'], color='blue', alpha=0.5)
+    plt.grid()
+    plt.title(f'Shareholder Yield for {sym}')
+    plt.legend()
+    plt.show()
+
+
+#-------------------------------------------------------------------------------------------------------------------------------
+
 
 def fmp_growth(sym,facs=[ "fiveYOperatingCFGrowthPerShare"]):
     ''' "revenueGrowth",
