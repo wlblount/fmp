@@ -1,4 +1,4 @@
-#version 1.0.5  updated 2/16/25
+#version 1.0.5  updated 2/17/25 added acceptance date as a fmp_incts factor
 
     ##TO DO - fmp_screen():  explore if all financial factors work (bal sheet items, income, items, metrics???
     ##      - explore 'requote_uri' in all urls.
@@ -6,11 +6,8 @@
 
 #     https://financialmodelingprep.com/developer/docs
 
-from tvDatafeed import TvDatafeed, Interval   # from https://github.com/rongardF/tvdatafeed
 import time
-import utils
 import certifi
-import bt
 import ffn
 import pandas as pd
 import numpy as np
@@ -24,16 +21,21 @@ logging.captureWarnings(True)
 from collections import defaultdict
 from urllib.request import urlopen
 from urllib.parse import urlencode
-import requests   
-from datetime import datetime 
-from tqdm import notebook, tqdm    #ex: for i in notebook.tqdm(range(1,100000000)):
+import requests
+from datetime import datetime
+from tqdm import notebook, tqdm
 from requests.utils import requote_uri
 from sklearn.preprocessing import StandardScaler
 from matplotlib.ticker import FormatStrFormatter
-from IPython.display import Markdown, display
-import fmpw
-
+from IPython.core.display import display, HTML
 import os
+import bt
+from tvDatafeed import TvDatafeed, Interval
+# Delay slow imports
+def load_utils():
+    import utils
+    return utils
+
 
 # Get the API key from the environment variable
 apikey = os.getenv('FMP_API_KEY')
@@ -42,6 +44,7 @@ apikey = os.getenv('FMP_API_KEY')
 if not apikey:
     raise ValueError("API key not found. Please set the environment variable 'FMP_API_KEY'.")
 
+pd.options.display.float_format = '{:,.2f}'.format
 
 #-----------------------------------------------------  
 
@@ -184,193 +187,825 @@ outputs: dataframe of marketcap values with a datetime index
     return dff.mktCap
 
 #-----------------------------------------------------
+# 2026-01-18 09:10am
 
-def fmp_balts(sym, facs=None, period='quarter'):
+def fmp_balts(sym, facs=None, period='quarter', limit=400):
     '''
+    Retrieves standardized Balance Sheet data from the FMP v3 endpoint.
+    Includes Smart Correction (Validation Flag) and auto-pruning of empty columns.
     
-	facs: LIST = ['date', 'symbol', 'reportedCurrency', 'fillingDate', 'acceptedDate',
-       'period', 'cashAndCashEquivalents', 'shortTermInvestments',
-       'cashAndShortTermInvestments', 'netReceivables', 'inventory',
-       'otherCurrentAssets', 'totalCurrentAssets', 'propertyPlantEquipmentNet',
-       'goodwill', 'intangibleAssets', 'goodwillAndIntangibleAssets',
-       'longTermInvestments', 'taxAssets', 'otherNonCurrentAssets',
-       'totalNonCurrentAssets', 'otherAssets', 'totalAssets',
-       'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue',
-       'otherCurrentLiabilities', 'totalCurrentLiabilities', 'longTermDebt',
-       'deferredRevenueNonCurrent', 'deferredTaxLiabilitiesNonCurrent',
-       'otherNonCurrentLiabilities', 'totalNonCurrentLiabilities',
-       'otherLiabilities', 'totalLiabilities', 'commonStock',
-       'retainedEarnings', 'accumulatedOtherComprehensiveIncomeLoss',
-       'othertotalStockholdersEquity', 'totalStockholdersEquity',
-       'totalLiabilitiesAndStockholdersEquity', 'totalInvestments',
-       'totalDebt', 'netDebt']
-    period = quarter, year
+    Parameters:
+    -----------
+    sym : str
+        The stock ticker symbol (e.g., 'AAPL').
+    facs : list, optional
+        List of specific line items to return. If None, returns the full standard set.
+        
+        Mandatory Columns (Always Returned):
+        ['reportedCurrency', 'calendarYear', 'period']
+        
+        available_tags = 
+        # Assets
+        'cashAndCashEquivalents', 'shortTermInvestments', 'netReceivables', 
+        'inventory', 'otherCurrentAssets', 'totalCurrentAssets',
+        'propertyPlantEquipmentNet', 'goodwill', 'intangibleAssets', 
+        'longTermInvestments', 'taxAssets', 'otherNonCurrentAssets', 'totalNonCurrentAssets',
+        'totalAssets',
+    
+        # Liabilities
+        'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue', 
+        'otherCurrentLiabilities', 'totalCurrentLiabilities',
+        'longTermDebt', 'capitalLeaseObligations', 'deferredTaxLiabilitiesNonCurrent', 
+        'otherNonCurrentLiabilities', 'totalNonCurrentLiabilities',
+        'totalLiabilities',
+    
+        # Equity
+        'commonStock', 'retainedEarnings', 'accumulatedOtherComprehensiveIncomeLoss',
+        'totalStockholdersEquity', 'totalLiabilitiesAndTotalEquity',
+    
+        # Analytical Metrics (Memo items)
+        'totalInvestments', 'totalDebt', 'netDebt', 'equity_error_delta'
     
     '''
-  
-    if facs==None:
-        full=['date', 'symbol', 'reportedCurrency', 
-       'period', 'cashAndCashEquivalents', 'shortTermInvestments',
-       'cashAndShortTermInvestments', 'netReceivables', 'inventory',
-       'otherCurrentAssets', 'totalCurrentAssets', 'propertyPlantEquipmentNet',
-       'goodwill', 'intangibleAssets', 'goodwillAndIntangibleAssets',
-       'longTermInvestments', 'taxAssets', 'otherNonCurrentAssets',
-       'totalNonCurrentAssets', 'otherAssets', 'totalAssets',
-       'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue',
-       'otherCurrentLiabilities', 'totalCurrentLiabilities', 'longTermDebt',
-       'deferredRevenueNonCurrent', 'deferredTaxLiabilitiesNonCurrent',
-       'otherNonCurrentLiabilities', 'totalNonCurrentLiabilities',
-       'otherLiabilities', 'totalLiabilities', 'commonStock',
-       'retainedEarnings', 'accumulatedOtherComprehensiveIncomeLoss',
-       'othertotalStockholdersEquity', 'totalStockholdersEquity',
-       'totalLiabilitiesAndStockholdersEquity', 'totalInvestments',
-       'totalDebt', 'netDebt']	
-        facs=full
-    sym=sym.upper()
-    url='https://financialmodelingprep.com/api/v3/balance-sheet-statement/'+sym+'?period='+period+'&limit=400&apikey='+apikey
-   
-    response = urlopen(url, cafile=certifi.where())
-    data = response.read().decode("utf-8")
-    stuff=json.loads(data)
-    idx = [sub['date'] for sub in stuff]
-    idx=pd.to_datetime(idx)
-	
-	 #[[sub[k] for k in keys] for sub in ld] to extract values from a list of keys as would be used in a function.  
-    # ie: the user selects the keys in the function.see below where k is items in list of function paramater values see: facs=[last of parameters/keys]
-	# and l is a list of dicts
-	
-    df = pd.DataFrame([[sub[k] for k in facs] for sub in stuff], columns=facs, index=idx)
-   
-    return df.iloc[::-1]
-	
-#-----------------------------------------------------------------------------
+    # 1. Define the internal list of available financial tags
+    available_tags = [
+        'fillingDate', 'acceptedDate', 
+        # Assets
+        'cashAndCashEquivalents', 'shortTermInvestments', 'netReceivables', 
+        'inventory', 'otherCurrentAssets', 'totalCurrentAssets',
+        'propertyPlantEquipmentNet', 'goodwill', 'intangibleAssets', 
+        'longTermInvestments', 'taxAssets', 'otherNonCurrentAssets', 'totalNonCurrentAssets',
+        'totalAssets',
+        
+        # Liabilities
+        'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue', 
+        'otherCurrentLiabilities', 'totalCurrentLiabilities',
+        'longTermDebt', 'capitalLeaseObligations', 'deferredTaxLiabilitiesNonCurrent', 
+        'otherNonCurrentLiabilities', 'totalNonCurrentLiabilities',
+        'totalLiabilities',
+        
+        # Equity
+        'commonStock', 'retainedEarnings', 'accumulatedOtherComprehensiveIncomeLoss',
+        'totalStockholdersEquity', 'totalLiabilitiesAndTotalEquity',
+        
+        # Analytical Metrics (Memo items)
+        'totalInvestments', 'totalDebt', 'netDebt','equity_error_delta'
+    ]
 
-def fmp_incts(sym, facs=None, period='quarter'):
-    '''
-    ######stmt = income-statement, balance-sheet-statement, cash-flow-statement, enterprise-values####
-	facs = ['date', 'symbol', 'reportedCurrency', 'fillingDate', 'acceptedDate',
-       'period', 'revenue', 'costOfRevenue', 'grossProfit', 'grossProfitRatio',
-       'researchAndDevelopmentExpenses', 'generalAndAdministrativeExpenses',
-       'sellingAndMarketingExpenses',
-       'sellingGeneralAndAdministrativeExpenses', 'otherExpenses',
-       'operatingExpenses', 'costAndExpenses', 'interestExpense',
-       'depreciationAndAmortization', 'ebitda', 'ebitdaratio',
-       'operatingIncome', 'operatingIncomeRatio',
-       'totalOtherIncomeExpensesNet', 'incomeBeforeTax',
-       'incomeBeforeTaxRatio', 'incomeTaxExpense', 'netIncome',
-       'netIncomeRatio', 'eps', 'epsdiluted', 'weightedAverageShsOut',
-       'weightedAverageShsOutDil'
-    period = quarter, year
-    
-    '''
-  
-    if facs==None:
-        full=['date', 'symbol', 'reportedCurrency',
-       'period', 'revenue', 'costOfRevenue', 'grossProfit', 'grossProfitRatio',
-       'researchAndDevelopmentExpenses', 'generalAndAdministrativeExpenses',
-       'sellingAndMarketingExpenses',
-       'sellingGeneralAndAdministrativeExpenses', 'otherExpenses',
-       'operatingExpenses', 'costAndExpenses', 'interestExpense',
-       'depreciationAndAmortization', 'ebitda', 'ebitdaratio',
-       'operatingIncome', 'operatingIncomeRatio',
-       'totalOtherIncomeExpensesNet', 'incomeBeforeTax',
-       'incomeBeforeTaxRatio', 'incomeTaxExpense', 'netIncome',
-       'netIncomeRatio', 'eps', 'epsdiluted', 'weightedAverageShsOut',
-       'weightedAverageShsOutDil']	
-        facs=full
-    sym=sym.upper()
-    
-  
-    url='https://financialmodelingprep.com/api/v3/income-statement/'+sym+'?period='+period+'&limit=400&apikey='+apikey
-   
-    response = urlopen(url, cafile=certifi.where())
-    data = response.read().decode("utf-8")
-    stuff=json.loads(data)
-    idx = [sub['date'] for sub in stuff]
-    idx=pd.to_datetime(idx)
+    sym = sym.upper().strip()
+    url = f"https://financialmodelingprep.com/api/v3/balance-sheet-statement/{sym}?period={period}&limit={limit}&apikey={apikey}"
+    url = requote_uri(url)
 
-    df = pd.DataFrame([[sub[k] for k in facs] for sub in stuff], columns=facs, index=idx)
-   
-    return df.iloc[::-1]	
-#-----------------------------------------------------
-def fmp_entts(sym, facs=None, period='quarter'):
-    '''
-   
-	facs = ['symbol', 'date', 'stockPrice', 'numberOfShares', 'marketCapitalization', 
-    'minusCashAndCashEquivalents', 'addTotalDebt', 'enterpriseValue']
-    period = quarter, year
-    
-    '''
-  
-    if facs==None:
-        full=['date', 'numberOfShares', 
-              'minusCashAndCashEquivalents', 
-              'addTotalDebt']	
-        facs=full
-    sym=sym.upper()
-    
-  
-    url='https://financialmodelingprep.com/api/v3/enterprise-values/'+sym+'?period='+period+'&limit=400&apikey='+apikey
-   
-    response = urlopen(url, cafile=certifi.where())
-    data = response.read().decode("utf-8")
-    stuff=json.loads(data)
-    idx = [sub['date'] for sub in stuff]
-    idx=pd.to_datetime(idx)
+    try:
+        response = urlopen(url, cafile=certifi.where())
+        stuff = json.loads(response.read().decode("utf-8"))
+        if not stuff or not isinstance(stuff, list): return pd.DataFrame()
 
-    df = pd.DataFrame([[sub[k] for k in facs] for sub in stuff], columns=facs, index=idx)
-   
-    return df.iloc[::-1]	
+        df = pd.DataFrame(stuff)
+        
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            df.index.name = 'date'
+        
+        df = df.sort_index()
+
+        # Logic: Drop columns that are 100% NaN (unused tags)
+        df = df.dropna(axis=1, how='all')
+
+        # Smart Correction (Validation Flag)
+        df['equity_error_delta'] = (df['totalAssets'].fillna(0) - 
+                                   (df['totalLiabilities'].fillna(0) + 
+                                    df['totalStockholdersEquity'].fillna(0)))
+
+        # Define Mandatory Columns (always shown first)
+        mandatory_cols = ['reportedCurrency', 'calendarYear', 'period']
+        
+        # If facs is None, use the full available tag list
+        if facs is None:
+            facs = available_tags
+            
+        # Clean the facs list to ensure they exist in the DF and don't duplicate mandatory cols
+        clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date', 'symbol'])]
+        
+        # Combine the lists for final output
+        final_cols = mandatory_cols + clean_facs
+
+        return df[final_cols]
+
+    except Exception as e:
+        print(f"Error in fmp_balts for {sym}: {e}")
+        return pd.DataFrame()
+#---------------------------------------------------------------------------
+#MOD  011826 4:41 PM
+def fmp_baltsC(sym, facs=None, period='quarter', limit=400,
+              qc_debt=True,
+              qc_abs_tol=5_000_000,        # $5m
+              qc_rel_tol=0.05,             # 5%
+              qc_max_date_gap_days=45,     # AR->STD alignment guard
+              qc_override_direction="up",  # "up" (recommended), "both"
+              qc_return_cols=True):
+    '''
+    Retrieves standardized Balance Sheet data from the FMP v3 endpoint.
+    Adds Smart Correction (equity_error_delta), auto-pruning of empty columns,
+    AND a debt QC/override layer using fmp_baltsar() to mitigate known standardized debt issues.
+
+    Debt QC philosophy (conservative):
+    - Default debt is standardized EX-LEASES: shortTermDebt + longTermDebt
+    - Compute AR debt from as-reported debt COMPONENTS (not aggregates) when coverage is "strong"
+    - Override only when AR indicates standardized debt is UNDERSTATED by a large margin
+      (this catches MLAB-type failures without wrecking the universe)
+
+    Parameters
+    ----------
+    qc_debt : bool
+        If True, compute debt_used_ex_leases with AR-based upward override when warranted.
+    qc_override_direction : {"up","both"}
+        "up": only override when AR debt > STD debt by thresholds (recommended)
+        "both": allow overrides in either direction when AR is strong (riskier)
+
+    Output columns added when qc_debt=True
+    ------------------------------------
+    debt_std_ex_leases
+    debt_ar_ex_leases
+    debt_ar_tag_count
+    debt_gap_std_minus_ar
+    debt_used_ex_leases
+    debt_source
+    debt_qc_flag
+    cash_used
+    net_debt_used_ex_leases
+    ar_debt_date_aligned
+
+    Notes
+    -----
+    - This function does NOT compute EV; it produces a better debt input for EV.
+    - You can still request specific facs; QC columns are appended if qc_return_cols=True.
+    '''
+
+    # -----------------------------
+    # 0) Standardized fetch (same as your original)
+    # -----------------------------
+    available_tags = [
+        'fillingDate', 'acceptedDate', 'cashAndCashEquivalents', 'shortTermInvestments',
+        'cashAndShortTermInvestments', 'netReceivables', 'inventory', 'otherCurrentAssets',
+        'totalCurrentAssets', 'propertyPlantEquipmentNet', 'goodwill', 'intangibleAssets',
+        'goodwillAndIntangibleAssets', 'longTermInvestments', 'taxAssets',
+        'otherNonCurrentAssets', 'totalNonCurrentAssets', 'otherAssets', 'totalAssets',
+        'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue',
+        'otherCurrentLiabilities', 'totalCurrentLiabilities', 'longTermDebt',
+        'deferredRevenueNonCurrent', 'deferredTaxLiabilitiesNonCurrent',
+        'otherNonCurrentLiabilities', 'totalNonCurrentLiabilities', 'otherLiabilities',
+        'capitalLeaseObligations', 'totalLiabilities', 'preferredStock', 'commonStock',
+        'retainedEarnings', 'accumulatedOtherComprehensiveIncomeLoss',
+        'othertotalStockholdersEquity', 'totalStockholdersEquity', 'totalEquity',
+        'totalLiabilitiesAndStockholdersEquity', 'minorityInterest',
+        'totalLiabilitiesAndTotalEquity', 'totalInvestments', 'totalDebt', 'netDebt'
+    ]
+
+    sym = sym.upper().strip()
+    url = f"https://financialmodelingprep.com/api/v3/balance-sheet-statement/{sym}?period={period}&limit={limit}&apikey={apikey}"
+    url = requote_uri(url)
+
+    try:
+        response = urlopen(url, cafile=certifi.where())
+        stuff = json.loads(response.read().decode("utf-8"))
+        if not stuff or not isinstance(stuff, list):
+            return pd.DataFrame()
+
+        df = pd.DataFrame(stuff)
+
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            df.index.name = 'date'
+
+        df = df.sort_index()
+        df = df.dropna(axis=1, how='all')
+
+        # Smart Correction
+        if all(c in df.columns for c in ['totalAssets','totalLiabilities','totalStockholdersEquity']):
+            df['equity_error_delta'] = (
+                df['totalAssets'].fillna(0)
+                - (df['totalLiabilities'].fillna(0) + df['totalStockholdersEquity'].fillna(0))
+            )
+
+        mandatory_cols = ['reportedCurrency', 'calendarYear', 'period']
+
+        if facs is None:
+            facs = available_tags
+
+        clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date','symbol'])]
+        final_cols = mandatory_cols + clean_facs
+        out = df[final_cols].copy()
+
+        # -----------------------------
+        # 1) Debt QC / override layer (optional)
+        # -----------------------------
+        if not qc_debt:
+            return out
+
+        # Ensure numeric types where needed
+        for c in ['shortTermDebt','longTermDebt','capitalLeaseObligations','totalDebt','netDebt',
+                  'cashAndShortTermInvestments','cashAndCashEquivalents','shortTermInvestments']:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce')
+
+        # Standardized debt (ex leases)
+        debt_std = df.get('shortTermDebt', np.nan) + df.get('longTermDebt', np.nan)
+
+        # Cash used (cash + ST inv)
+        cash_used = df.get('cashAndShortTermInvestments', np.nan)
+        if isinstance(cash_used, pd.Series):
+            cash_used = cash_used.fillna(df.get('cashAndCashEquivalents', np.nan) + df.get('shortTermInvestments', 0.0))
+
+        # Defaults
+        debt_used = debt_std.copy()
+        debt_source = pd.Series(["standardized"] * len(df), index=df.index)
+        debt_qc_flag = pd.Series([False] * len(df), index=df.index)
+        debt_ar = pd.Series([np.nan] * len(df), index=df.index)
+        debt_ar_tag_count = pd.Series([0] * len(df), index=df.index)
+        ar_date_aligned = pd.Series([pd.NaT] * len(df), index=df.index)
+
+        # --- As-reported debt component extraction ---
+        # Only use AR components (not aggregates) to avoid lease/double-count ambiguity
+        AR_DEBT_COMPONENT_TAGS = [
+            # common debt components across schemas
+            'debtcurrent',
+            'longtermdebtnoncurrent',
+            'longtermdebtcurrent',
+            'shorttermborrowings',
+            'shorttermdebt',
+            'commercialpaper',
+            'lineofcredit',
+            'linesofcreditcurrent',
+            'longtermlineofcredit',
+            'secureddebtcurrent',
+            'securedlongtermdebt',
+            'notespayablecurrent',
+            'longtermnotespayable',
+            'othershorttermborrowings',
+            'convertibledebtcurrent',
+            'convertibledebtnoncurrent'
+        ]
+
+        # Fetch AR once (same period/limit)
+        ar = fmp_baltsar(sym, facs=None, period=period, limit=limit)
+        if ar is not None and not ar.empty:
+            ar = ar.copy().sort_index()
+
+            # Compute AR debt component sum per AR date
+            # (only sum tags that exist and are numeric)
+            ar_debt_cols = [c for c in AR_DEBT_COMPONENT_TAGS if c in ar.columns]
+            if ar_debt_cols:
+                ar_num = ar[ar_debt_cols].apply(pd.to_numeric, errors='coerce')
+                ar_debt_sum = ar_num.fillna(0).sum(axis=1)
+                ar_tag_n = (ar_num.notna() & (ar_num != 0)).sum(axis=1)
+
+                # Align AR to STD dates (asof backward), with date gap guard
+                std_dates = df.index.to_series().rename("std_date").to_frame()
+                ar_tmp = pd.DataFrame({
+                    "ar_date": ar_debt_sum.index,
+                    "ar_debt": ar_debt_sum.values,
+                    "ar_tag_n": ar_tag_n.values
+                }).sort_values("ar_date")
+
+                std_tmp = std_dates.reset_index(drop=True).sort_values("std_date")
+
+                aligned = pd.merge_asof(
+                    std_tmp,
+                    ar_tmp,
+                    left_on="std_date",
+                    right_on="ar_date",
+                    direction="backward",
+                    allow_exact_matches=True
+                )
+
+                # Push aligned values back onto index
+                aligned.index = df.index
+                debt_ar = aligned["ar_debt"]
+                debt_ar_tag_count = aligned["ar_tag_n"]
+                ar_date_aligned = aligned["ar_date"]
+
+                # Date-gap guard
+                # Date-gap guard
+                ar_dt = pd.to_datetime(ar_date_aligned, errors="coerce")
+                gap_days = (pd.Series(df.index, index=df.index) - ar_dt).abs().dt.days
+                gap_ok = gap_days <= qc_max_date_gap_days
+
+                gap_ok = gap_days <= qc_max_date_gap_days
+
+                # AR "strong" coverage rule (conservative)
+                # require >=2 nonzero component tags
+                ar_strong = (debt_ar_tag_count >= 2) & gap_ok & debt_ar.notna() & (debt_ar > 0)
+
+                # Compute mismatch
+                debt_gap = debt_std - debt_ar
+                rel_gap = (debt_gap.abs() / debt_ar.abs()).replace([np.inf, -np.inf], np.nan)
+
+                # Override rule
+                if qc_override_direction.lower() == "up":
+                    override = ar_strong & (debt_ar > debt_std) & (debt_gap.abs() > qc_abs_tol) & (rel_gap > qc_rel_tol)
+                else:
+                    override = ar_strong & (debt_gap.abs() > qc_abs_tol) & (rel_gap > qc_rel_tol)
+
+                debt_used = debt_used.where(~override, debt_ar)
+                debt_source = debt_source.where(~override, "as_reported_override")
+                debt_qc_flag = debt_qc_flag.where(~override, True)
+
+                # Keep debt_gap for reporting (std - ar)
+                debt_gap_std_minus_ar = debt_gap
+            else:
+                debt_gap_std_minus_ar = pd.Series([np.nan] * len(df), index=df.index)
+        else:
+            debt_gap_std_minus_ar = pd.Series([np.nan] * len(df), index=df.index)
+
+        net_debt_used = debt_used - cash_used
+
+        # Append QC columns (don’t break existing selection logic)
+        qc_cols = pd.DataFrame({
+            "debt_std_ex_leases": debt_std,
+            "debt_ar_ex_leases": debt_ar,
+            "debt_ar_tag_count": debt_ar_tag_count,
+            "debt_gap_std_minus_ar": debt_gap_std_minus_ar,
+            "debt_used_ex_leases": debt_used,
+            "debt_source": debt_source,
+            "debt_qc_flag": debt_qc_flag,
+            "cash_used": cash_used,
+            "net_debt_used_ex_leases": net_debt_used,
+            "ar_debt_date_aligned": ar_date_aligned
+        }, index=df.index)
+
+        if qc_return_cols:
+            out = out.join(qc_cols, how="left")
+
+        return out
+
+    except Exception as e:
+        print(f"Error in fmp_balts for {sym}: {e}")
+        return pd.DataFrame()
+#--------------------------------------------------------------------
+## MOD  01/18/2026 7:00 AM
+
+def fmp_baltsar(sym, facs=None, period='quarter', limit=400):
+    '''As-Reported Balance Sheet with Discovery-focused Pruning.'''
+    sym = sym.upper().strip()
+    p = "annual" if period.lower() in ("year", "annual") else "quarter"
+    url = f"https://financialmodelingprep.com/api/v3/balance-sheet-statement-as-reported/{sym}?period={p}&limit={int(limit)}&apikey={apikey}"
+    url = requote_uri(url)
+
+    try:
+        response = urlopen(url, cafile=certifi.where())
+        stuff = json.loads(response.read().decode("utf-8"))
+        if not stuff: return pd.DataFrame()
+
+        df = pd.DataFrame(stuff)
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            df.index.name = "date"
+        
+        df = df.sort_index()
+
+        # DROP strictly empty columns (improves scannability for AR data)
+        df = df.dropna(axis=1, how='all')
+
+        # Smart Correction for AR (Mapping verification)
+        if all(col in df.columns for col in ['assets', 'liabilities', 'stockholdersequity']):
+            df['equity_error_delta'] = (df['assets'].fillna(0) - 
+                                       (df['liabilities'].fillna(0) + 
+                                        df['stockholdersequity'].fillna(0)))
+
+        if facs:
+            clean_facs = [f for f in facs if f != 'date']
+            df = df.reindex(columns=clean_facs)
+            
+        return df
+
+    except Exception as e:
+        print(f"Error in fmp_baltsar for {sym}: {e}")
+        return pd.DataFrame()
+#----------------------------------------------------------------------------
+
+
+# 2026-01-19 03:23:22
+def fmp_incts(sym, facs=None, period='quarter', limit=400):
+    '''
+    Retrieves standardized Income Statement data from the FMP v3 endpoint.
+    Includes Smart Correction (Validation Flag), Calculated EBITDA, and auto-pruning.
     
+    Parameters:
+    -----------
+    sym : str
+        The stock ticker symbol (e.g., 'AAPL').
+    facs : list, optional
+        List of specific line items to return. If None, returns the full standard set.
+        
+        Mandatory Columns (Always Returned):
+        ['reportedCurrency', 'calendarYear', 'period']
+        
+        AVAILABLE TAGS:
+        ['cik', 'fillingDate', 'acceptedDate', 'revenue', 'costOfRevenue', 'grossProfit',
+         'researchAndDevelopmentExpenses', 'generalAndAdministrativeExpenses',
+         'sellingAndMarketingExpenses', 
+         'otherExpenses', 'operatingExpenses', 'interestIncome', 
+         'interestExpense', 'depreciationAndAmortization', 'operatingIncome', 'ebitda',
+         'totalOtherIncomeExpensesNet', 'incomeBeforeTax', 'incomeTaxExpense', 
+         'netIncome', 'eps', 'epsdiluted', 'weightedAverageShsOut', 
+         'weightedAverageShsOutDil', 'link', 'finalLink']
+    '''
+    # 1. Define the internal list of available financial tags (Added 'ebitda')
+    available_tags = [
+        'fillingDate', 'acceptedDate', 'revenue', 'costOfRevenue', 'grossProfit',
+        'researchAndDevelopmentExpenses', 'generalAndAdministrativeExpenses',
+        'sellingAndMarketingExpenses', 
+        'otherExpenses', 'operatingExpenses',  
+        'depreciationAndAmortization', 'operatingIncome', 'ebitda', 
+        'totalOtherIncomeExpensesNet', 'interestIncome', 'interestExpense', 
+        'incomeBeforeTax', 'incomeTaxExpense', 'netIncome', 'eps', 'epsdiluted', 
+        'weightedAverageShsOut', 'weightedAverageShsOutDil','op_income_error_delta'
+    ]
+
+    sym = sym.upper().strip()
+    fetch_period = 'quarter' if period.lower() == 'ttm' else period
+    url = f'https://financialmodelingprep.com/api/v3/income-statement/{sym}?period={fetch_period}&limit={limit}&apikey={apikey}'
+    url = requote_uri(url)
+
+    try:
+        response = urlopen(url, cafile=certifi.where())
+        stuff = json.loads(response.read().decode("utf-8"))
+        if not stuff or not isinstance(stuff, list): return pd.DataFrame()
+
+        df = pd.DataFrame(stuff)
+        
+        # Ensure date is the index
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            df.index.name = 'date'
+        
+        df = df.sort_index()
+
+        # Logic: Drop columns that are 100% NaN
+        df = df.dropna(axis=1, how='all')
+
+        # --- NEW: Calculate EBITDA ---
+        # EBITDA = Operating Income + Depreciation & Amortization
+        if 'operatingIncome' in df.columns and 'depreciationAndAmortization' in df.columns:
+            df['ebitda'] = df['operatingIncome'].fillna(0) + df['depreciationAndAmortization'].fillna(0)
+
+        # Smart Correction (Validation Flag)
+        if all(col in df.columns for col in ['grossProfit', 'operatingExpenses', 'operatingIncome']):
+            df['op_income_error_delta'] = (df['grossProfit'].fillna(0) - 
+                                           df['operatingExpenses'].fillna(0) - 
+                                           df['operatingIncome'].fillna(0))
+
+        # Define Mandatory Columns (always shown first)
+        mandatory_cols = ['reportedCurrency', 'calendarYear', 'period']
+        
+        # If facs is None, use the full available tag list
+        if facs is None:
+            facs = available_tags
+            
+        # Clean the facs list to ensure they exist and don't duplicate mandatory cols
+        clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date', 'symbol'])]
+
+        # Handle TTM / Annual logic
+        if period.lower() == 'ttm':
+            df = df.reset_index()
+            df = df.drop_duplicates(subset=['calendarYear', 'period'], keep='last')
+            window_size = df['period'].nunique() if df['period'].nunique() in [2, 4] else 4
+            
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            # Ensure we only sum appropriate line items (avoid years/eps/shares)
+            cols_to_sum = [c for c in numeric_cols if c in clean_facs and 'eps' not in c.lower() and 'Year' not in c]
+            
+            df_ttm = df.copy()
+            df_ttm[cols_to_sum] = df[cols_to_sum].rolling(window=window_size).sum()
+            df = df_ttm.dropna(subset=[cols_to_sum[0]]).set_index('date')
+
+        elif period.lower() == 'annual':
+            df = df[df['period'] == 'FY']
+
+        # Combine the lists for final output
+        final_cols = mandatory_cols + [f for f in clean_facs if f in df.columns]
+
+        return df[final_cols]
+
+    except Exception as e:
+        print(f"Error in fmp_incts for {sym}: {e}")
+        return pd.DataFrame()
 #-----------------------------------------------------	
+## MOD  01/18/2026 7:00 AM
 
-def fmp_cashfts(sym, facs=None, period='quarter'):
+def fmp_inctsar(sym, facs=None, period='quarter', limit=400):
     '''
-    ######stmt = income-statement, balance-sheet-statement, cash-flow-statement, enterprise-values####
-	facs = ['date', 'symbol', 'reportedCurrency', 'fillingDate', 'acceptedDate', 'period', 'netIncome', 
-    'depreciationAndAmortization', 'deferredIncomeTax', 'stockBasedCompensation', 
-    'changeInWorkingCapital', 'accountsReceivables', 'inventory', 'accountsPayables', 
-    'otherWorkingCapital', 'otherNonCashItems', 'netCashProvidedByOperatingActivities', 
-    'investmentsInPropertyPlantAndEquipment', 'acquisitionsNet', 'purchasesOfInvestments', 
-    'salesMaturitiesOfInvestments', 'otherInvestingActivites', 'netCashUsedForInvestingActivites', 
-    'debtRepayment', 'commonStockIssued', 'commonStockRepurchased', 'dividendsPaid', 'otherFinancingActivites', 
-    'netCashUsedProvidedByFinancingActivities', 'effectOfForexChangesOnCash', 'netChangeInCash', 
-    'cashAtEndOfPeriod', 'cashAtBeginningOfPeriod', 'operatingCashFlow', 'capitalExpenditure', 
-    'freeCashFlow', 'link', 'finalLink']
+    Retrieves raw XBRL "As-Reported" Income Statement data from FMP v3.
+    Designed for auditing and reference of raw filing tags.
     
-    period = quarter, year
-    
-    '''
-  
-    if facs==None:
-         full=['date', 'symbol', 'reportedCurrency', 'period', 'netIncome', 
-    'depreciationAndAmortization', 'deferredIncomeTax', 'stockBasedCompensation', 
-    'changeInWorkingCapital', 'accountsReceivables', 'inventory', 'accountsPayables', 
-    'otherWorkingCapital', 'otherNonCashItems', 'netCashProvidedByOperatingActivities', 
-    'investmentsInPropertyPlantAndEquipment', 'acquisitionsNet', 'purchasesOfInvestments', 
-    'salesMaturitiesOfInvestments', 'otherInvestingActivites', 'netCashUsedForInvestingActivites', 
-    'debtRepayment', 'commonStockIssued', 'commonStockRepurchased', 'dividendsPaid', 'otherFinancingActivites', 
-    'netCashUsedProvidedByFinancingActivities', 'effectOfForexChangesOnCash', 'netChangeInCash', 
-    'cashAtEndOfPeriod', 'cashAtBeginningOfPeriod', 'operatingCashFlow', 'capitalExpenditure', 
-    'freeCashFlow', 'link', 'finalLink']	
-         facs=full
-    sym=sym.upper()
-    
-  
-    url='https://financialmodelingprep.com/api/v3/cash-flow-statement/'+sym+'?period='+period+'&limit=400&apikey='+apikey
-   
-    response = urlopen(url, cafile=certifi.where())
-    data = response.read().decode("utf-8")
-    stuff=json.loads(data)
-    idx = [sub['date'] for sub in stuff]
-    idx=pd.to_datetime(idx)
+    Parameters:
+    -----------
+    sym : str
+        The stock ticker symbol (e.g., 'AAPL', 'INTC').
+    facs : list, optional
+        List of specific raw XBRL tags to return.
+        NOTE: Tags vary by company/industry. To see available tags for a ticker:
+              >>> df = fmp_inctsar('INTC')
+              >>> print(df.columns.tolist())
+    period : str, default 'quarter'
+        The time interval. Options: 'quarter', 'annual' (or 'year').
+    limit : int, default 400
+        Number of historical filings to retrieve.
 
-    df = pd.DataFrame([[sub[k] for k in facs] for sub in stuff], columns=facs, index=idx)
-   
-    return df.iloc[::-1]
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame indexed by date (oldest to newest).
+    '''
+    sym = sym.upper().strip()
+    
+    # Normalize period to 'annual' or 'quarter' per API requirements
+    p = "annual" if period.lower() in ("year", "annual") else "quarter"
+
+    url = f"https://financialmodelingprep.com/api/v3/income-statement-as-reported/{sym}?period={p}&limit={int(limit)}&apikey={apikey}"
+    url = requote_uri(url)
+
+    try:
+        response = urlopen(url, cafile=certifi.where())
+        stuff = json.loads(response.read().decode("utf-8"))
+
+        if not isinstance(stuff, list) or len(stuff) == 0:
+            return pd.DataFrame()
+
+        # Load into DataFrame
+        df = pd.DataFrame(stuff)
+
+        # 1. Standardize the Index
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'], errors="coerce")
+            df = df.dropna(subset=['date']).set_index('date')
+            df.index.name = "date"
+        
+        # 2. Chronological Sort
+        df = df.sort_index()
+
+        # 3. CLEANUP: Prune columns that are 100% NaN (unused XBRL tags)
+        # This is vital for AR data where hundreds of empty columns may exist
+        df = df.dropna(axis=1, how='all')
+
+        # 4. PASSIVE VERIFICATION: Flag Operating Income discrepancies
+        # Note: We use .fillna(0) only for the math check
+        check_tags = ['revenue', 'costofrevenue', 'operatingexpenses', 'operatingincome']
+        if all(col in df.columns for col in check_tags):
+            df['op_income_error_delta'] = (
+                df['revenue'].fillna(0) - 
+                df['costofrevenue'].fillna(0) - 
+                df['operatingexpenses'].fillna(0) - 
+                df['operatingincome'].fillna(0)
+            )
+
+        # 5. Factor Filtering
+        if facs is not None:
+            # Date is excluded from filtering as it is now the index
+            clean_facs = [f for f in facs if f != 'date']
+            df = df.reindex(columns=clean_facs)
+
+        return df
+
+    except Exception as e:
+        print(f"Error in fmp_inctsar for {sym}: {e}")
+        return pd.DataFrame()
+
+
+#--------------------------------------------------------
+# 2026-01-18 07:55:12
+
+def fmp_cashfts(sym, facs=None, period='quarter', limit=400):
+    '''
+    Retrieves standardized Cash Flow Statement data from the FMP v3 endpoint.
+    Includes auto-pruning of empty columns and TTM logic support.
+    
+    Parameters:
+    -----------
+    sym : str
+        The stock ticker symbol (e.g., 'AAPL').
+    facs : list, optional
+        List of specific line items to return. If None, returns the full standard set.
+        
+        Mandatory Columns (Always Returned):
+        ['reportedCurrency', 'calendarYear', 'period']
+        
+        AVAILABLE TAGS:
+        ['fillingDate', 'acceptedDate','netIncome', 'depreciationAndAmortization', 'deferredIncomeTax', 
+         'stockBasedCompensation', 'changeInWorkingCapital', 'accountsReceivables', 
+         'inventory', 'accountsPayables', 'otherWorkingCapital', 'otherNonCashItems', 
+         'netCashProvidedByOperatingActivities', 'investmentsInPropertyPlantAndEquipment', 
+         'acquisitionsNet', 'purchasesOfInvestments', 'salesMaturitiesOfInvestments', 
+         'otherInvestingActivites', 'netCashUsedForInvestingActivites', 'debtRepayment', 
+         'commonStockIssued', 'commonStockRepurchased', 'dividendsPaid', 
+         'otherFinancingActivites', 'netCashUsedProvidedByFinancingActivities', 
+         'effectOfForexChangesOnCash', 'netChangeInCash', 'cashAtEndOfPeriod', 
+         'cashAtBeginningOfPeriod', 'operatingCashFlow', 'capitalExpenditure', 
+         'freeCashFlow', 'link', 'finalLink' ]
+    '''
+    # 1. Define the internal list of available financial tags
+    available_tags = [
+        'fillingDate', 'acceptedDate','netIncome', 'depreciationAndAmortization', 'deferredIncomeTax', 
+        'stockBasedCompensation', 'changeInWorkingCapital', 'accountsReceivables', 
+        'inventory', 'accountsPayables', 'otherWorkingCapital', 'otherNonCashItems', 
+        'netCashProvidedByOperatingActivities', 'investmentsInPropertyPlantAndEquipment', 
+        'acquisitionsNet', 'purchasesOfInvestments', 'salesMaturitiesOfInvestments', 
+        'otherInvestingActivites', 'netCashUsedForInvestingActivites', 'debtRepayment', 
+        'commonStockIssued', 'commonStockRepurchased', 'dividendsPaid', 
+        'otherFinancingActivites', 'netCashUsedProvidedByFinancingActivities', 
+        'effectOfForexChangesOnCash', 'netChangeInCash', 'cashAtEndOfPeriod', 
+        'cashAtBeginningOfPeriod', 'operatingCashFlow', 'capitalExpenditure', 
+        'freeCashFlow'
+    ]
+
+    sym = sym.upper().strip()
+    fetch_period = 'quarter' if period.lower() == 'ttm' else period
+    url = f'https://financialmodelingprep.com/api/v3/cash-flow-statement/{sym}?period={fetch_period}&limit={limit}&apikey={apikey}'
+    url = requote_uri(url)
+
+    try:
+        response = urlopen(url, cafile=certifi.where())
+        stuff = json.loads(response.read().decode("utf-8"))
+        if not stuff or not isinstance(stuff, list): return pd.DataFrame()
+
+        df = pd.DataFrame(stuff)
+        
+        # Ensure date is the index
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            df.index.name = 'date'
+        
+        df = df.sort_index()
+
+        # Logic: Drop columns that are 100% NaN
+        df = df.dropna(axis=1, how='all')
+
+        # Define Mandatory Columns (always shown first)
+        mandatory_cols = ['reportedCurrency', 'calendarYear', 'period']
+        
+        # If facs is None, use the full available tag list
+        if facs is None:
+            facs = available_tags
+            
+        # Clean the facs list to ensure they exist and don't duplicate mandatory/index cols
+        clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date', 'symbol'])]
+
+        # Handle TTM / Annual logic
+        if period.lower() == 'ttm':
+            df = df.reset_index()
+            df = df.drop_duplicates(subset=['calendarYear', 'period'], keep='last')
+            window_size = df['period'].nunique() if df['period'].nunique() in [2, 4] else 4
+            
+            numeric_cols = df.select_dtypes(include=['number']).columns
+            # Ensure we only sum appropriate line items (avoid years/dates)
+            cols_to_sum = [c for c in numeric_cols if c in clean_facs and 'Year' not in c]
+            
+            df_ttm = df.copy()
+            df_ttm[cols_to_sum] = df[cols_to_sum].rolling(window=window_size).sum()
+            df = df_ttm.dropna(subset=[cols_to_sum[0]]).set_index('date')
+
+        elif period.lower() == 'annual':
+            df = df[df['period'] == 'FY']
+
+        # Combine the lists for final output
+        final_cols = mandatory_cols + [f for f in clean_facs if f in df.columns]
+
+        return df[final_cols]
+
+    except Exception as e:
+        print(f"Error in fmp_cashfts for {sym}: {e}")
+        return pd.DataFrame()
 
 #-----------------------------------------------------
+# 2026-01-18 07:55:35
+def fmp_cashftsar(sym, facs=None, period='quarter', limit=400):
+    '''
+    Retrieves raw XBRL "As-Reported" Cash Flow Statement data from FMP v3.
+    '''
+    sym = sym.upper().strip()
+    p = "annual" if period.lower() in ("year", "annual") else "quarter"
+    # URL updated with limit parameter
+    url = f"https://financialmodelingprep.com/api/v3/cash-flow-statement-as-reported/{sym}?period={p}&limit={int(limit)}&apikey={apikey}"
+    url = requote_uri(url)
 
+    try:
+        response = urlopen(url, cafile=certifi.where())
+        stuff = json.loads(response.read().decode("utf-8"))
+        if not isinstance(stuff, list) or len(stuff) == 0: return pd.DataFrame()
+
+        df = pd.DataFrame(stuff)
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
+            df.index.name = "date"
+        
+        df = df.sort_index()
+        df = df.dropna(axis=1, how='all')
+
+        # Passive Verification Identity
+        check_tags = ['netcashprovidedbyoperatingactivities', 'netcashusedforinvestingactivites', 
+                      'netcashusedprovidedbyfinancingactivities', 'netchangeincash']
+        if all(col in df.columns for col in check_tags):
+            df['cash_flow_error_delta'] = (
+                df['netcashprovidedbyoperatingactivities'].fillna(0) + 
+                df['netcashusedforinvestingactivites'].fillna(0) + 
+                df['netcashusedprovidedbyfinancingactivities'].fillna(0) + 
+                df.get('effectofforexchangesoncash', pd.Series(0, index=df.index)).fillna(0) - 
+                df['netchangeincash'].fillna(0)
+            )
+
+        if facs is not None:
+            clean_facs = [f for f in facs if f != 'date']
+            df = df.reindex(columns=clean_facs)
+        return df
+
+    except Exception as e:
+        print(f"Error in fmp_cashftsar for {sym}: {e}")
+        return pd.DataFrame()
+
+#----------------------------------------------------------
+#MOD 1/20/267:59AM
+
+def fmp_shares(sym, facs=['outstandingShares']):
+    '''
+    Retrieves historical shares data.
+    FIXED: Uses pd.to_numeric to prevent strings from breaking math operations.
+    '''
+    sym = sym.upper()
+    url = f'https://financialmodelingprep.com/api/v4/historical/shares_float?symbol={sym}&apikey={apikey}'
+
+    response = urlopen(url, cafile=certifi.where())
+    data = response.read().decode("utf-8")
+    stuff = json.loads(data)
+
+    try:
+        if not stuff:
+             return pd.DataFrame(columns=facs)
+
+        idx = pd.to_datetime([sub['date'] for sub in stuff])
+        df = pd.DataFrame([[sub.get(k) for k in facs] for sub in stuff], columns=facs, index=idx)
+        
+        # --- THE FIX: Convert strings to numbers ---
+        df = df.apply(pd.to_numeric, errors='coerce')
+        
+        return df.iloc[::-1]
+            
+    except (IndexError, KeyError, TypeError):
+        return pd.DataFrame(columns=facs)
+#------------------------------------------------------
+###01/20/26 8:01 AM
+
+def fmp_entts(sym, freq='Q', limit=40):
+    """
+    Returns historical Enterprise Value DataFrame.
+    Includes explicit numeric enforcement to prevent "can't multiply sequence" errors.
+    """
+    sym = sym.upper()
+    
+    # 1. Fetch Data
+    bs = fmp_balts(sym, period='quarter', limit=limit, 
+                   facs=['totalDebt', 'minorityInterest', 'cashAndShortTermInvestments'])
+    inct = fmp_incts(sym, period='quarter', limit=limit, 
+                    facs=['weightedAverageShsOutDil'])
+    sh = fmp_shares(sym, facs=['outstandingShares'])
+    px = fmp_price(sym, start=bs.index.min().strftime('%Y-%m-%d'))
+    
+    # 2. Alignment Logic
+    if freq.upper() == 'Q':
+        df = pd.concat([bs, inct], axis=1)
+        df['price'] = px['close'].reindex(df.index, method='ffill')
+        df['shares_actual'] = sh['outstandingShares'].reindex(df.index, method='ffill')
+    else:
+        df = px[['close']].rename(columns={'close': 'price'})
+        df = df.join(bs).join(inct).join(sh['outstandingShares']).ffill()
+        df.rename(columns={'outstandingShares': 'shares_actual'}, inplace=True)
+
+    # --- THE DEFENSIVE FIX: FORCE NUMERIC ---
+    # This ensures that even if fmp_shares returns a string, it becomes a number here
+    cols_to_fix = ['price', 'shares_actual', 'weightedAverageShsOutDil', 
+                   'totalDebt', 'minorityInterest', 'cashAndShortTermInvestments']
+    
+    for col in cols_to_fix:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # 3. EV Calculations (Now safe from TypeErrors)
+    df['ev_institutional'] = (df['price'] * df['weightedAverageShsOutDil']) + \
+                             (df['totalDebt'].fillna(0) + df['minorityInterest'].fillna(0) - \
+                              df['cashAndShortTermInvestments'].fillna(0))
+    
+    df['ev_actual'] = (df['price'] * df['shares_actual']) + \
+                       (df['totalDebt'].fillna(0) + df['minorityInterest'].fillna(0) - \
+                        df['cashAndShortTermInvestments'].fillna(0))
+    
+    return df
+#-------------------------------------------------------
 #https://financialmodelingprep.com/api/v3/historical-chart/1min/BTCUSD?apikey=
 
 def fmp_intra(sym, period='1hour'):
@@ -460,9 +1095,7 @@ def fmp_mergarb(syms, shar_fact=1, cash=0, start='1960-01-01', per=True):
     return df	
 	
 #---------------------------------------------------------------------
-
-
-def fmp_screen(**kwargs):
+def fmp_screen(limit=10000, **kwargs):
     """
     Uses the Financial Modeling Prep Screen API to filter companies based on criteria.
 
@@ -471,7 +1104,7 @@ def fmp_screen(**kwargs):
         industry (str, optional): Industry to filter by.
         country (str, optional): Country to filter by.
             
-    ex:  fmp_screen(county='US', marketCapMoreThan='1000000000 ', industry='Insurance—Life')
+    ex:  fmp_screen(country='US', marketCapMoreThan='1000000000 ', industry='Insurance—Life')
         
     Sectors and Industries
     
@@ -677,69 +1310,65 @@ Renewable Utilities
 
     base_url = f"https://financialmodelingprep.com/api/v3/stock-screener"
     
-    # Build query parameters dynamically based on provided filters
+    cols = ['symbol', 'companyName', 'sector', 'industry', 'country', 'marketCap(mil)', 'exchange']
+
+    # Build query parameters dynamically 
     params = {
-        "apikey": apikey,
-        "sector": kwargs.get("sector"),
-        "industry": kwargs.get("industry"),
-        "country": kwargs.get("country")
+        k: (v.replace('—', '-') if isinstance(v, str) else v) 
+        for k, v in kwargs.items() if v is not None
     }
     
-    # Remove any parameters that are None
-    params = {k: v for k, v in params.items() if v is not None}
+    # --- EXPLICIT ASSIGNMENT: Ensure limit is in params even if not passed in call ---
+    params["limit"] = limit
+    params["apikey"] = apikey
     
-    # Make the API request with the dynamic parameters
-    response = requests.get(base_url, params=params)
-    
-    # Check if the request was successful
-    if response.status_code != 200:
-        print("Failed to retrieve data. Check your API key and internet connection.")
-        return []
-    
-    data = response.json()
-    
-    if not data:
-        print("No data fetched from the API with the provided filters.")
-        return []
+    try:
+        response = requests.get(base_url, params=params)
+        
+        if response.status_code != 200:
+            print(f"Failed to retrieve data. Status code: {response.status_code}")
+            return pd.DataFrame(columns=cols).set_index('symbol')
+        
+        data = response.json()
+        
+        if not data:
+            print(f"No results found for provided filters: {kwargs}")
+            return pd.DataFrame(columns=cols).set_index('symbol')
+            
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return pd.DataFrame(columns=cols).set_index('symbol')
     
     print(f"Found {len(data)} stocks:")
-    # Create DataFrame
+    
     df = pd.DataFrame([ 
-        [sub['symbol'], sub['companyName'], sub['sector'], sub['industry'], sub['country'], sub['marketCap'], sub['exchangeShortName']] 
+        [sub.get('symbol'), sub.get('companyName'), sub.get('sector'), 
+         sub.get('industry'), sub.get('country'), sub.get('marketCap'), 
+         sub.get('exchangeShortName')] 
         for sub in data
     ], columns=['symbol', 'companyName', 'sector', 'industry', 'country', 'marketCap', 'exchange'])
 
-    # Convert market cap to millions without formatting it as a string initially
     df['marketCap(mil)'] = (df['marketCap'] / 1000000).round(0)
-
-    # Sort by 'marketCap(mil)' in descending order while it is still numeric
     df.sort_values('marketCap(mil)', ascending=False, inplace=True)
-
-    # Now format 'marketCap(mil)' with commas
-    #df['marketCap(mil)'] = df['marketCap(mil)'].apply(lambda x: f"{int(x):,}")
     df['marketCap(mil)'] = df['marketCap(mil)'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "N/A")
 
-    # Drop the original 'marketCap' column
     df = df.drop('marketCap', axis=1)
-
-    # Set 'symbol' as the index
     df.set_index('symbol', inplace=True)
 
     return df
-    
-    
+
 
 #------------------------------------------------------------
 def fmp_earnSym(sym, n=5):
-    '''
+    """
     input: symbol as string
            n as int.  the number of quarters to return
     returns:  historical and future earnings dates, times and estimates
-    '''
-    url= f"https://financialmodelingprep.com/api/v3/historical/earning_calendar/{sym}?apikey={apikey}"
+    """
+    url = f"https://financialmodelingprep.com/api/v3/historical/earning_calendar/{sym}?apikey={apikey}"
     response = urlopen(url, cafile=certifi.where())
     data = response.read().decode("utf-8")
-    stuff=json.loads(data) 
+    stuff = json.loads(data)
     return pd.DataFrame(stuff).head(n).sort_values('date')
 #------------------------------------------------------------------
 
@@ -1115,24 +1744,24 @@ def fmp_const(sym, tickersOnly=False):
     df['country'] = df['isin'].apply(lambda x: re.split('[^a-zA-Z]', x)[0])
     if tickersOnly:
          return df.asset.tolist()
-    df = df.loc[:,['asset', 'name', 'weightPercentage', 'country','updated']].set_index('asset', drop=True)
-    df.columns=['name', 'pct', 'country', 'updated']
+    df = df.loc[:,['asset', 'isin', 'name', 'weightPercentage', 'country','updated']].set_index('asset', drop=True)
+    df.columns=['isin','name', 'pct', 'country', 'updated']
     return df		
 	
 #-----------------------------------------------------------------------------------------------
 
-def fmp_shares(sym='aapl'):
-    '''
-    input:symbol
-    output: list : float, oustanding, percent float
-    '''
-    sym=sym.upper()
-    floaturl=r'https://financialmodelingprep.com/api/v4/shares_float?symbol='+sym+'&apikey='+apikey
-    response = urlopen(floaturl, cafile=certifi.where())
-    data = response.read().decode("utf-8")
-    stuff=json.loads(data)
+# def fmp_shares(sym='aapl'):
+#     '''
+#     input:symbol
+#     output: list : float, oustanding, percent float
+#     '''
+#     sym=sym.upper()
+#     floaturl=r'https://financialmodelingprep.com/api/v4/shares_float?symbol='+sym+'&apikey='+apikey
+#     response = urlopen(floaturl, cafile=certifi.where())
+#     data = response.read().decode("utf-8")
+#     stuff=json.loads(data)
     
-    return [stuff[0]['floatShares'],stuff[0]['outstandingShares'], np.round(stuff[0]['floatShares']/stuff[0]['outstandingShares'],3)] 
+#     return [stuff[0]['floatShares'],stuff[0]['outstandingShares'], np.round(stuff[0]['floatShares']/stuff[0]['outstandingShares'],3)] 
 	
 #-------------------------------------------------------------------------------------------------
 
@@ -1216,19 +1845,50 @@ def fmp_corr(sym1, sym2, lbk=60):
 #-----------------------------------------------------------------------------
 
 def fmp_cormatrix(syms, start=60):
-    
-    df=fmp_priceLoop(syms,start = utils.ddelt(start+2))
+    """
+    Calculate the correlation matrix or coefficient of log returns for a set of financial symbols.
+
+    This function retrieves price data for the specified symbols over a given time period, 
+    computes log returns, and returns either a styled correlation matrix (for 3+ symbols) 
+    or a single correlation coefficient (for 2 symbols).
+
+    Parameters:
+        syms (list): A list of financial symbols (e.g., stock tickers) to analyze.
+        start (int, optional): The number of days of historical data to retrieve, 
+            starting from the current date. Defaults to 60.
+
+    Returns:
+        pandas.io.formats.style.Styler or float:
+            - If len(syms) > 2: A styled pandas DataFrame with the correlation matrix,
+              formatted with a 'Greys' background gradient and values rounded to 2 decimals.
+            - If len(syms) == 2: A float representing the correlation coefficient between
+              the two symbols.
+
+    Notes:
+        - Requires `fmp_priceLoop` (assumed to fetch price data) and `utils.ddelt` 
+          (assumed to compute a date offset) to be defined elsewhere.
+        - Assumes price data in `df` is a pandas DataFrame with symbols as columns and
+          dates as rows.
+        - Log returns are calculated as the difference of the natural logarithm of prices,
+          with the first row (NaN) dropped.
+        - For a single symbol (len(syms) == 1), the behavior is undefined and may raise an error.
+
+    Examples:
+        >>> fmp_cormatrix(['AAPL', 'MSFT', 'GOOG'])
+        # Returns a styled correlation matrix
+        >>> fmp_cormatrix(['AAPL', 'MSFT'])
+        0.75  # Example correlation coefficient
+    """
+    df = fmp_priceLoop(syms, start=utils.ddelt(start + 2))
     log_returns_df = np.log(df).diff().dropna()
 
-    if len(syms)>2:
-        
+    if len(syms) > 2:
         # Compute the correlation matrix using pandas
         corr_matrix = pd.DataFrame(log_returns_df.corr())
         styled_df = corr_matrix.style.background_gradient(cmap='Greys').format('{:.2f}')
         return styled_df
     else:
-        return log_returns_df.corr().iloc[0,1]
-          
+        return log_returns_df.corr().iloc[0, 1]
     
     
 #------------------------------------------------------------------------------    
@@ -1237,7 +1897,7 @@ def fmp_cormatrix(syms, start=60):
     
 #---------------------------------------------------------------------------------
     
-import pandas as pd
+
 
 def fmp_filings(sym, limit=20):
     url = f"https://financialmodelingprep.com/api/v3/sec_filings/{sym}?page=0&limit={limit}&apikey={apikey}"
@@ -1528,7 +2188,7 @@ def fmp_plotFinMult(data, title='Multi-Symbol Chart'):
 def fmp_plotBarRetts(data): 
     """
     Plots a bar chart of returns over time, converting dates to categorical labels
-    to avoid gaps for non-trading days.
+    to avoid gaps for non-trading days. Automatically adjusts the number of x-axis ticks.
     
     Parameters:
     -----------
@@ -1548,7 +2208,7 @@ def fmp_plotBarRetts(data):
     colors = np.where(values >= 0, 'g', 'r')  # Assign green for positive, red for negative
 
     # Convert dates to string labels (so they are treated as categorical)
-    date_labels = data.index.strftime('%m/%d/%Y')  # Format: MM/DD
+    date_labels = data.index.strftime('%m/%d/%Y')
 
     # Create the figure
     fig, ax = plt.subplots(figsize=(10, 5))
@@ -1557,10 +2217,25 @@ def fmp_plotBarRetts(data):
     # Use range as x-values to plot without gaps
     ax.bar(range(len(data)), values, color=colors)
 
-    # Replace x-ticks with date labels
-    ax.set_xticks(range(len(data)))
-    ax.set_xticklabels(date_labels, rotation=45)
+    # Determine tick frequency based on number of data points
+    n = len(data)
+    if n <= 10:
+        tick_freq = 1
+    elif n <= 30:
+        tick_freq = 2
+    elif n <= 60:
+        tick_freq = 5
+    elif n <= 120:
+        tick_freq = 10
+    else:
+        tick_freq = max(n // 15, 1)
 
+    # Set ticks and labels
+    ticks = range(0, len(data), tick_freq)
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([date_labels[i] for i in ticks], rotation=45)
+
+    plt.tight_layout()
     plt.show()
 
 #----------------------------------------------------------------
@@ -1636,7 +2311,7 @@ Plots the given DataFrame using dual y-axes.
 
 #---------------------------------------------------------------
 
-def fmp_plotStackedRet(retSyms, lineSym, start=utils.ddelt(63)):
+def fmp_plotStackedRet(retSyms, lineSym, start=None):
     '''
 This function plots 3 stacked Return plots over a Line plot.
 
@@ -1739,7 +2414,7 @@ def fmp_sectInd():
 
 
 #----------------------------------------------------------------------------------------
-def fmp_plotMult(sym = 'COIN', start=utils.ddelt(504)):
+def fmp_plotMult(sym = 'COIN', start=None):
     df=fmp_price(sym, start=start)
     df['rsi'] = fmp_rsi(sym,periods=3, watch=False)
 
@@ -1805,7 +2480,7 @@ def fmp_plotMult(sym = 'COIN', start=utils.ddelt(504)):
 
 #------------------------------------------------------------------------------
 
-def fmp_plotPiv(sym='SPY', start=utils.ddelt(252*2)):
+def fmp_plotPiv(sym='SPY', start=None):
     df=fmp_price(sym, start=start)
 
     window=30
@@ -2036,40 +2711,74 @@ def fmp_newsdict(sym=None, limit='50'):
 	
 def fmp_news(sym=None, limit='50'):
     '''
-    syms= symbols in the form of: 'KSHB,GNLN,PBL,NBN,SKT' 
-    convert list of strings by: ','.join(['KSHB', 'GNLN', 'PBL'])
+    Retrieve and display stock news from Financial Modeling Prep API.
+
+    Parameters:
+    -----------
+    sym : str, optional
+        Stock ticker symbol(s) to query. Can be a single symbol (e.g., 'AAPL') 
+        or multiple symbols as a comma-separated string (e.g., 'AAPL,MSFT,GOOGL').
+        If None, returns general stock news not specific to any symbol.
+        Default is None.
+    limit : str, optional
+        Maximum number of news articles to retrieve, as a string.
+        Default is '50'.
+
+    Returns:
+    --------
+    None
+        Displays formatted HTML output in Jupyter notebook showing:
+        - Stock symbol and publication date (bold)
+        - News source site (italicized)
+        - News text content
+        - Clickable URL to original article
+
+    Examples:
+    ---------
+    >>> fmp_news('AAPL')  # Get news for Apple
+    >>> fmp_news('AAPL,MSFT', limit='25')  # Get 25 news items for Apple and Microsoft
+    >>> fmp_news()  # Get general stock market news
+    
+    Notes:
+    ------
+    - Requires an API key stored in variable 'apikey'
+    - Uses Financial Modeling Prep API (https://financialmodelingprep.com/api/v3/stock_news)
+    - Must be run in a Jupyter notebook environment for HTML display
+    - Requires internet connection and imported dependencies: urlopen, certifi, json
+    - Symbols are automatically converted to uppercase
+    
+    Raises:
+    -------
+    Depends on API response - may raise exceptions if:
+        - API key is invalid
+        - Network connection fails
+        - Invalid ticker symbols provided
     '''
     
     if sym:
-        sym=sym.upper()
+        sym = sym.upper()
         symnewsurl = f"https://financialmodelingprep.com/api/v3/stock_news?tickers={sym}&limit={limit}&apikey={apikey}"
         response = urlopen(symnewsurl, cafile=certifi.where())
         data = response.read().decode("utf-8")
-        stuff=json.loads(data)
+        stuff = json.loads(data)
         for i in stuff:
-            print(i['symbol'], i['publishedDate'])
-            print (i['site'])
-            print (i['text'])
-            print()
-            print(i['url'])
-            print()
-            print()	
-        
+            display(HTML(f"<p style='font-size:20px; font-weight:bold;'>{i['symbol']} - {i['publishedDate']}</p>"))
+            display(HTML(f"<p style='font-style:italic;'>{i['site']}</p>"))
+            display(HTML(f"<p>{i['text']}</p>"))
+            display(HTML(f"<a href='{i['url']}' target='_blank'>{i['url']}</a>"))
+            display(HTML("<br>"))
             
     else:
         allnewsurl = f"https://financialmodelingprep.com/api/v3/stock_news?limit={limit}&apikey={apikey}"
         response = urlopen(allnewsurl, cafile=certifi.where())
         data = response.read().decode("utf-8")
-        stuff=json.loads(data)
+        stuff = json.loads(data)
         for i in stuff:
-            print(i['symbol'], i['publishedDate'])
-            print (i['site'])
-            print (i['text'])
-            print()
-            print(i['url'])
-            print()
-            print()
-        
+            display(HTML(f"<p style='font-size:20px; font-weight:bold;'>{i['symbol']} - {i['publishedDate']}</p>"))
+            display(HTML(f"<p style='font-style:italic;'>{i['site']}</p>"))
+            display(HTML(f"<p>{i['text']}</p>"))
+            display(HTML(f"<a href='{i['url']}' target='_blank'>{i['url']}</a>"))
+            display(HTML("<br>"))
 #-------------------------------------------------------
 def fmp_divHist(sym):
     '''
@@ -2461,15 +3170,111 @@ def fmp_growth(sym,facs=[ "fiveYOperatingCFGrowthPerShare"]):
 #--------------------------------------------------------------
 
 def fmp_isActive(syms):
-    '''
-    input: a string or a list of strings / symbols
-    prints the symbol if not actively trading or not in the FMP system
-    '''
+    """Check if stock symbols are actively trading using FMP profile data.
+    
+    Args:
+        syms (str or list): A single stock symbol as a string or a list of stock symbols.
+    
+    Returns:
+        None: This function does not return a value. It prints the symbol and its status
+              if the symbol is not actively trading or not found in the FMP system.
+    
+    Prints:
+        str: For each symbol that is not actively trading:
+            - "<symbol> False" if the symbol exists but is not actively trading
+            - "<symbol> Possible Bad Symbol" if the symbol is not found or has no status
+    
+    Example:
+        >>> fmp_isActive('AAPL')
+        # No output if AAPL is actively trading
+        >>> fmp_isActive(['AAPL', 'INVALID', 'XYZ'])
+        INVALID Possible Bad Symbol
+        XYZ Possible Bad Symbol
+        # Assuming INVALID and XYZ are not valid/active symbols
+    
+    Notes:
+        - Requires the `fmp_profF` function to fetch profile data from Financial Modeling Prep.
+        - Depends on the FMP API returning a dictionary with 'isActivelyTrading' key.
+        
+    """
+    all_active = True
+    
     # Ensure syms is a list, even if a single string is provided
     if isinstance(syms, str):
         syms = [syms]
 
     for sym in syms:
-        status = fmp_profF(sym).get('isActivelyTrading')
+        status = fmp_profF(sym).get('isActivelyTrading')   
         if status is not True:
-            print(sym, status)
+            all_active = False  # Set flag to False if any symbol is inactive or bad
+            if status is None:
+                print(sym, 'Possible Bad Symbol')
+            else:
+                print(sym, status)
+
+    if all_active:
+        print("All Symbols are Active on the FMP System")
+
+#------------------------------------------------------------------------------------------------
+def fmp_isin(isin):
+    url = f"https://financialmodelingprep.com/api/v4/search/isin?isin={isin}&apikey="+apikey
+    response = urlopen(url, cafile=certifi.where())
+    data = response.read().decode("utf-8")
+    return json.loads(data)
+    
+#-----------------------------------------------------------
+
+def fmp_transcript(sym, year=None, quarter=None, output='string'):
+    '''
+    Retrieves earning call transcripts with a structured header.
+    - output='string': Returns clean text with header (default).
+    - output='print': Prints text with header to screen.
+    - output='file': Saves text with header to '[sym]_[year]_Q[quarter].txt'.
+    '''
+    sym = sym.upper()
+    
+    if year and quarter:
+        url = f'https://financialmodelingprep.com/api/v3/earning_call_transcript/{sym}?quarter={quarter}&year={year}&apikey={apikey}'
+    else:
+        url = f'https://financialmodelingprep.com/api/v4/earning_call_transcript?symbol={sym}&apikey={apikey}'
+
+    response = urlopen(url, cafile=certifi.where())
+    data = response.read().decode("utf-8")
+    stuff = json.loads(data)
+    
+    if not stuff:
+        print(f"No data found for {sym}.")
+        return None if year else pd.DataFrame()
+
+    if year and quarter:
+        # 1. Extract metadata and raw text
+        transcript_data = stuff[0]
+        date_time = transcript_data.get('date', 'Unknown Date')
+        raw_text = transcript_data.get('content', '')
+        
+        # 2. Build the structured Header for the LLM
+        header = f"SYMBOL: {sym}\n"
+        header += f"QUARTER: Q{quarter}\n"
+        header += f"YEAR: {year}\n"
+        header += f"DATE/TIME: {date_time}\n"
+        header += f"--- START OF TRANSCRIPT ---\n\n"
+        
+        # 3. Clean the text body
+        clean_body = " ".join(raw_text.split()) 
+        full_output = header + clean_body
+        
+        # 4. Handle output flags
+        if output == 'print':
+            print(full_output)
+            return None
+        
+        elif output == 'file':
+            filename = f"{sym}_{year}_Q{quarter}.txt"
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(full_output)
+            print(f"Transcript with header saved to {filename}")
+            return None
+        
+        return full_output # Default: return as string
+
+    return pd.DataFrame(stuff)
