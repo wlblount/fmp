@@ -3271,8 +3271,40 @@ def fmp_transcript(sym, year=None, quarter=None, output='string'):
     header += f"DATE/TIME: {date_time}\n"
     header += f"--- START OF TRANSCRIPT ---\n\n"
 
-    # Clean the text body
-    clean_body = " ".join(raw_text.split())
+    # Clean and format the text body
+    import re
+    import textwrap
+
+    # Clean up whitespace first
+    clean_text = " ".join(raw_text.split())
+
+    # Find speaker patterns (e.g., "John Smith:" or "Operator:")
+    # Insert line breaks before each speaker
+    formatted_text = re.sub(
+        r'([A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*)\s*:',
+        r'\n\n\1:',
+        clean_text
+    )
+
+    # Make speaker names uppercase (name followed by colon at start of line)
+    def uppercase_speaker(match):
+        return match.group(1).upper() + ':'
+
+    formatted_text = re.sub(
+        r'^([A-Za-z]+(?:\s+[A-Za-z]+)*):',
+        uppercase_speaker,
+        formatted_text,
+        flags=re.MULTILINE
+    )
+
+    # Wrap each paragraph at 80 characters
+    paragraphs = formatted_text.strip().split('\n\n')
+    wrapped_paragraphs = []
+    for para in paragraphs:
+        wrapped = textwrap.fill(para.strip(), width=80)
+        wrapped_paragraphs.append(wrapped)
+
+    clean_body = '\n\n'.join(wrapped_paragraphs)
     full_output = header + clean_body
 
     # Handle output flags
