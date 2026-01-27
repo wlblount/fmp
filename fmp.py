@@ -3238,65 +3238,44 @@ def fmp_transcript(sym, year=None, quarter=None, output='string'):
     '''
     sym = sym.upper()
 
-    # If no year/quarter specified, get the most recent transcript
-    if not year or not quarter:
-        list_url = f'https://financialmodelingprep.com/api/v4/earning_call_transcript?symbol={sym}&apikey={apikey}'
-        response = urlopen(list_url, context=ssl_context)
-        data = response.read().decode("utf-8")
-        available = json.loads(data)
+    # Build URL - v3 endpoint works with or without year/quarter
+    if year and quarter:
+        url = f'https://financialmodelingprep.com/api/v3/earning_call_transcript/{sym}?quarter={quarter}&year={year}&apikey={apikey}'
+    else:
+        # Without year/quarter, returns all transcripts (most recent first)
+        url = f'https://financialmodelingprep.com/api/v3/earning_call_transcript/{sym}?apikey={apikey}'
 
-        if not available:
-            print(f"No transcripts found for {sym}.")
-            return None
-
-        # Handle nested list structure from v4 API
-        if isinstance(available[0], list):
-            available = available[0]
-
-        if not available:
-            print(f"No transcripts found for {sym}.")
-            return None
-
-        # If user wants the list of available transcripts
-        if output == 'list':
-            return pd.DataFrame(available)
-
-        # Get the most recent transcript's year and quarter
-        most_recent = available[0]
-        year = most_recent.get('year')
-        quarter = most_recent.get('quarter')
-
-        if not year or not quarter:
-            print(f"Could not determine year/quarter for most recent transcript.")
-            return None
-
-    # Fetch the specific transcript
-    url = f'https://financialmodelingprep.com/api/v3/earning_call_transcript/{sym}?quarter={quarter}&year={year}&apikey={apikey}'
     response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
 
     if not stuff:
-        print(f"No transcript found for {sym} Q{quarter} {year}.")
+        print(f"No transcripts found for {sym}.")
         return None
 
-    # 1. Extract metadata and raw text
+    # If user wants the list of all available transcripts
+    if output == 'list':
+        return pd.DataFrame(stuff)
+
+    # Get the first (most recent) transcript
     transcript_data = stuff[0]
+    year = transcript_data.get('year')
+    quarter = transcript_data.get('quarter')
     date_time = transcript_data.get('date', 'Unknown Date')
     raw_text = transcript_data.get('content', '')
 
-    # 2. Build the structured Header for the LLM
+    # Build the structured Header for the LLM
     header = f"SYMBOL: {sym}\n"
     header += f"QUARTER: Q{quarter}\n"
     header += f"YEAR: {year}\n"
     header += f"DATE/TIME: {date_time}\n"
     header += f"--- START OF TRANSCRIPT ---\n\n"
 
-    # 3. Clean the text body
+    # Clean the text body
     clean_body = " ".join(raw_text.split())
     full_output = header + clean_body
 
-    # 4. Handle output flags
+    # Handle output flags
     if output == 'print':
         print(full_output)
         return None
