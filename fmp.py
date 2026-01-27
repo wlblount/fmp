@@ -3229,54 +3229,75 @@ def fmp_isin(isin):
 def fmp_transcript(sym, year=None, quarter=None, output='string'):
     '''
     Retrieves earning call transcripts with a structured header.
+    - If year and quarter provided: Returns that specific transcript.
+    - If not provided: Returns the most recent transcript available.
     - output='string': Returns clean text with header (default).
     - output='print': Prints text with header to screen.
     - output='file': Saves text with header to '[sym]_[year]_Q[quarter].txt'.
+    - output='list': Returns DataFrame of all available transcripts.
     '''
     sym = sym.upper()
-    
-    if year and quarter:
-        url = f'https://financialmodelingprep.com/api/v3/earning_call_transcript/{sym}?quarter={quarter}&year={year}&apikey={apikey}'
-    else:
-        url = f'https://financialmodelingprep.com/api/v4/earning_call_transcript?symbol={sym}&apikey={apikey}'
 
+    # If no year/quarter specified, get the most recent transcript
+    if not year or not quarter:
+        list_url = f'https://financialmodelingprep.com/api/v4/earning_call_transcript?symbol={sym}&apikey={apikey}'
+        response = urlopen(list_url, context=ssl_context)
+        data = response.read().decode("utf-8")
+        available = json.loads(data)
+
+        if not available:
+            print(f"No transcripts found for {sym}.")
+            return None
+
+        # If user wants the list of available transcripts
+        if output == 'list':
+            return pd.DataFrame(available)
+
+        # Get the most recent transcript's year and quarter
+        most_recent = available[0]
+        year = most_recent.get('year')
+        quarter = most_recent.get('quarter')
+
+        if not year or not quarter:
+            print(f"Could not determine year/quarter for most recent transcript.")
+            return None
+
+    # Fetch the specific transcript
+    url = f'https://financialmodelingprep.com/api/v3/earning_call_transcript/{sym}?quarter={quarter}&year={year}&apikey={apikey}'
     response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
-    
+
     if not stuff:
-        print(f"No data found for {sym}.")
-        return None if year else pd.DataFrame()
+        print(f"No transcript found for {sym} Q{quarter} {year}.")
+        return None
 
-    if year and quarter:
-        # 1. Extract metadata and raw text
-        transcript_data = stuff[0]
-        date_time = transcript_data.get('date', 'Unknown Date')
-        raw_text = transcript_data.get('content', '')
-        
-        # 2. Build the structured Header for the LLM
-        header = f"SYMBOL: {sym}\n"
-        header += f"QUARTER: Q{quarter}\n"
-        header += f"YEAR: {year}\n"
-        header += f"DATE/TIME: {date_time}\n"
-        header += f"--- START OF TRANSCRIPT ---\n\n"
-        
-        # 3. Clean the text body
-        clean_body = " ".join(raw_text.split()) 
-        full_output = header + clean_body
-        
-        # 4. Handle output flags
-        if output == 'print':
-            print(full_output)
-            return None
-        
-        elif output == 'file':
-            filename = f"{sym}_{year}_Q{quarter}.txt"
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(full_output)
-            print(f"Transcript with header saved to {filename}")
-            return None
-        
-        return full_output # Default: return as string
+    # 1. Extract metadata and raw text
+    transcript_data = stuff[0]
+    date_time = transcript_data.get('date', 'Unknown Date')
+    raw_text = transcript_data.get('content', '')
 
-    return pd.DataFrame(stuff)
+    # 2. Build the structured Header for the LLM
+    header = f"SYMBOL: {sym}\n"
+    header += f"QUARTER: Q{quarter}\n"
+    header += f"YEAR: {year}\n"
+    header += f"DATE/TIME: {date_time}\n"
+    header += f"--- START OF TRANSCRIPT ---\n\n"
+
+    # 3. Clean the text body
+    clean_body = " ".join(raw_text.split())
+    full_output = header + clean_body
+
+    # 4. Handle output flags
+    if output == 'print':
+        print(full_output)
+        return None
+
+    elif output == 'file':
+        filename = f"{sym}_{year}_Q{quarter}.txt"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(full_output)
+        print(f"Transcript with header saved to {filename}")
+        return None
+
+    return full_output  # Default: return as string
