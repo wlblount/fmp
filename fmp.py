@@ -8,6 +8,8 @@
 
 import time
 import certifi
+import ssl
+ssl_context = ssl.create_default_context(cafile=certifi.where())
 import ffn
 import pandas as pd
 import numpy as np
@@ -27,7 +29,7 @@ from tqdm import notebook, tqdm
 from requests.utils import requote_uri
 from sklearn.preprocessing import StandardScaler
 from matplotlib.ticker import FormatStrFormatter
-from IPython.core.display import display, HTML
+from IPython.display import display, HTML
 import os
 import bt
 from tvDatafeed import TvDatafeed, Interval
@@ -61,7 +63,7 @@ def fmp_price(syms, start='1960-01-01', end=str(dt.datetime.now().date()), facs=
     
    
     url=requote_uri(f'https://financialmodelingprep.com/api/v3/historical-price-full/{syms}?from={start}&to={end}&apikey={apikey}')
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     l=stuff['historical'] 
@@ -87,7 +89,7 @@ def fmp_priceMult(syms, start='1960-01-01', end=str(dt.datetime.now().date()), f
     syms=','.join(syms)
 
     url=requote_uri('https://financialmodelingprep.com/api/v3/historical-price-full/'+syms+'?from='+start+'&to='+end+'&apikey='+apikey)
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     data=stuff['historicalStockList'] 
@@ -138,7 +140,7 @@ def fmp_priceLbk(sym, date,facs=['close']):
            
     '''
     url= f"https://financialmodelingprep.com/api/v3/historical-price-full/{sym}?from={date}&to={date}&apikey=deb84eb89cd5f862f8f3216ea4d44719"
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     l=stuff['historical'] [0]
@@ -257,7 +259,7 @@ def fmp_balts(sym, facs=None, period='quarter', limit=400):
     url = requote_uri(url)
 
     try:
-        response = urlopen(url, cafile=certifi.where())
+        response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
         if not stuff or not isinstance(stuff, list): return pd.DataFrame()
 
@@ -368,7 +370,7 @@ def fmp_baltsC(sym, facs=None, period='quarter', limit=400,
     url = requote_uri(url)
 
     try:
-        response = urlopen(url, cafile=certifi.where())
+        response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
         if not stuff or not isinstance(stuff, list):
             return pd.DataFrame()
@@ -555,7 +557,7 @@ def fmp_baltsar(sym, facs=None, period='quarter', limit=400):
     url = requote_uri(url)
 
     try:
-        response = urlopen(url, cafile=certifi.where())
+        response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
         if not stuff: return pd.DataFrame()
 
@@ -632,7 +634,7 @@ def fmp_incts(sym, facs=None, period='quarter', limit=400):
     url = requote_uri(url)
 
     try:
-        response = urlopen(url, cafile=certifi.where())
+        response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
         if not stuff or not isinstance(stuff, list): return pd.DataFrame()
 
@@ -731,7 +733,7 @@ def fmp_inctsar(sym, facs=None, period='quarter', limit=400):
     url = requote_uri(url)
 
     try:
-        response = urlopen(url, cafile=certifi.where())
+        response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
 
         if not isinstance(stuff, list) or len(stuff) == 0:
@@ -829,7 +831,7 @@ def fmp_cashfts(sym, facs=None, period='quarter', limit=400):
     url = requote_uri(url)
 
     try:
-        response = urlopen(url, cafile=certifi.where())
+        response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
         if not stuff or not isinstance(stuff, list): return pd.DataFrame()
 
@@ -895,7 +897,7 @@ def fmp_cashftsar(sym, facs=None, period='quarter', limit=400):
     url = requote_uri(url)
 
     try:
-        response = urlopen(url, cafile=certifi.where())
+        response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
         if not isinstance(stuff, list) or len(stuff) == 0: return pd.DataFrame()
 
@@ -940,7 +942,7 @@ def fmp_shares(sym, facs=['outstandingShares']):
     sym = sym.upper()
     url = f'https://financialmodelingprep.com/api/v4/historical/shares_float?symbol={sym}&apikey={apikey}'
 
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
 
@@ -1018,7 +1020,7 @@ def fmp_intra(sym, period='1hour'):
 
     if period=='1day':
         url = "https://financialmodelingprep.com/api/v3/historical-price-full/"+sym.upper()+"?apikey="+apikey
-        response = urlopen(url, cafile=certifi.where())
+        response = urlopen(url, context=ssl_context)
         data = response.read().decode("utf-8")
         return pd.DataFrame(json.loads(data)['historical']).set_index('date').sort_index(ascending=True)
     else:
@@ -1061,7 +1063,7 @@ def fmp_search(searchterm):
     
     '''
     searchurl='https://financialmodelingprep.com/api/v3/search?query='+searchterm+'&limit=1000&apikey='+apikey
-    response = urlopen(searchurl, cafile=certifi.where())
+    response = urlopen(searchurl, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     df= pd.DataFrame(stuff)[['symbol', 'name']]
@@ -1366,7 +1368,7 @@ def fmp_earnSym(sym, n=5):
     returns:  historical and future earnings dates, times and estimates
     """
     url = f"https://financialmodelingprep.com/api/v3/historical/earning_calendar/{sym}?apikey={apikey}"
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
     return pd.DataFrame(stuff).head(n).sort_values('date')
@@ -1404,7 +1406,7 @@ def fmp_earnCal(start=str(dt.datetime.now().date()), end=str(dt.datetime.now().d
     
     '''
     earnurl='https://financialmodelingprep.com/api/v3/earning_calendar?from='+start+'&to='+end+'&apikey='+apikey
-    response = urlopen(earnurl, cafile=certifi.where())
+    response = urlopen(earnurl, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     df=pd.DataFrame(stuff).iloc[:,0:5]
@@ -1437,7 +1439,7 @@ def fmp_earnEst(sym, period='quarter'):
     '''
 
     url= f"https://financialmodelingprep.com/api/v3/analyst-estimates/{sym}?period={period}&apikey={apikey}"
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data) 
 
@@ -1460,7 +1462,7 @@ def fmp_earnEst(sym, period='quarter'):
 
 def fmp_ticker(sym):
     url = requote_uri('https://financialmodelingprep.com/api/v3/search-ticker?query='+sym+'&limit=1000&apikey='+apikey)
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     return stuff	
@@ -1534,7 +1536,7 @@ currYield:  last dividend x 4
 
     url='https://financialmodelingprep.com/api/v3/historical-price-full/stock_dividend/'+sym+'?apikey='+apikey
 
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data) 
     df = pd.DataFrame(stuff['historical'])
@@ -1677,7 +1679,7 @@ Output: top 40 holdings df of date of report, symbol, position size in shares
     
     
     insurl='https://financialmodelingprep.com/api/v3/form-thirteen/'+cik+'?date='+date+'&apikey='+apikey
-    response = urlopen(insurl, cafile=certifi.where())
+    response = urlopen(insurl, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     stuff
@@ -1700,7 +1702,7 @@ Output: Entity name as a string
     url = 'https://financialmodelingprep.com/api/v3/cik/'+cik+'?apikey='+apikey
 
     # Send request to Financial Modeling Prep API
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     stuff=stuff[0]
@@ -1717,7 +1719,7 @@ Output: dataframe of enbtity name matches and cik #
     '''
        
     insurl='https://financialmodelingprep.com/api/v3/cik-search/'+entity+'?apikey='+apikey
-    response = urlopen(insurl, cafile=certifi.where())
+    response = urlopen(insurl, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     df=pd.DataFrame(stuff)
@@ -1757,7 +1759,7 @@ def fmp_const(sym, tickersOnly=False):
 #     '''
 #     sym=sym.upper()
 #     floaturl=r'https://financialmodelingprep.com/api/v4/shares_float?symbol='+sym+'&apikey='+apikey
-#     response = urlopen(floaturl, cafile=certifi.where())
+#     response = urlopen(floaturl, context=ssl_context)
 #     data = response.read().decode("utf-8")
 #     stuff=json.loads(data)
     
@@ -1775,7 +1777,7 @@ def fmp_close(sym,lbk=1000):
 	    '''
     #sym=sym.upper()
     closeurl='https://financialmodelingprep.com/api/v3/historical-price-full/'+sym+'?serietype=line&timeseries='+str(lbk)+'&apikey='+apikey
-    response = urlopen(closeurl, cafile=certifi.where())
+    response = urlopen(closeurl, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     l=stuff['historical'] 
@@ -1933,7 +1935,7 @@ def fmp_prof(syms, facs=['companyName','sector', 'industry', 'mktCap'] ):
         syms=tuple(syms)
         syms=','.join(syms)
     profurl=requote_uri('https://financialmodelingprep.com/api/v3/profile/'+syms+'?apikey='+apikey)
-    response = urlopen(profurl, cafile=certifi.where())
+    response = urlopen(profurl, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     idx = [sub['symbol'] for sub in stuff]
@@ -1966,7 +1968,7 @@ def fmp_profF(sym, facs=None ):
 			'ipoDate', 'isEtf', 'isActivelyTrading' , 'description'  ]	
         facs=full
     profurl=requote_uri('https://financialmodelingprep.com/api/v3/profile/'+sym+'?apikey='+apikey)
-    response = urlopen(profurl, cafile=certifi.where())
+    response = urlopen(profurl, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
     try:
@@ -2693,7 +2695,7 @@ def fmp_newsdict(sym=None, limit='50'):
     if sym:
         sym=sym.upper()
         symnewsurl = f"https://financialmodelingprep.com/api/v3/stock_news?tickers={sym}&limit={limit}&apikey={apikey}"
-        response = urlopen(symnewsurl, cafile=certifi.where())
+        response = urlopen(symnewsurl, context=ssl_context)
         data = response.read().decode("utf-8")
         stuff=json.loads(data)
         
@@ -2701,7 +2703,7 @@ def fmp_newsdict(sym=None, limit='50'):
             
     else:
         allnewsurl = f"https://financialmodelingprep.com/api/v3/stock_news?limit={limit}&apikey={apikey}"
-        response = urlopen(allnewsurl, cafile=certifi.where())
+        response = urlopen(allnewsurl, context=ssl_context)
         data = response.read().decode("utf-8")
         stuff=json.loads(data)
         
@@ -2758,7 +2760,7 @@ def fmp_news(sym=None, limit='50'):
     if sym:
         sym = sym.upper()
         symnewsurl = f"https://financialmodelingprep.com/api/v3/stock_news?tickers={sym}&limit={limit}&apikey={apikey}"
-        response = urlopen(symnewsurl, cafile=certifi.where())
+        response = urlopen(symnewsurl, context=ssl_context)
         data = response.read().decode("utf-8")
         stuff = json.loads(data)
         for i in stuff:
@@ -2770,7 +2772,7 @@ def fmp_news(sym=None, limit='50'):
             
     else:
         allnewsurl = f"https://financialmodelingprep.com/api/v3/stock_news?limit={limit}&apikey={apikey}"
-        response = urlopen(allnewsurl, cafile=certifi.where())
+        response = urlopen(allnewsurl, context=ssl_context)
         data = response.read().decode("utf-8")
         stuff = json.loads(data)
         for i in stuff:
@@ -2786,7 +2788,7 @@ def fmp_divHist(sym):
     returns:  DataFrame of dividend $/share with ex-date as the index
     '''
     url= f"https://financialmodelingprep.com/api/v3/historical-price-full/stock_dividend/{sym}?apikey={apikey}"
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)['historical']
     
@@ -2855,7 +2857,7 @@ def fmp_ratios(symbol, facs=['currentRatio', 'quickRatio', 'cashRatio',
   
     facs=['date']+facs
     url=f'https://financialmodelingprep.com/api/v3/ratios/{symbol}?period=quarter&apikey={apikey}'
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
  
@@ -2908,7 +2910,7 @@ def fmp_ratiosttm(symbol, facs=['dividendYielTTM','dividendYielPercentageTTM','p
   
     
     url=f'https://financialmodelingprep.com/api/v3/ratios-ttm/{symbol}?period=quarter&apikey={apikey}'
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
     stuff = stuff[0]
@@ -2959,7 +2961,7 @@ def fmp_keyMetrics(symbol, facs=['revenuePerShare','netIncomePerShare','operatin
   
     facs=['date']+facs
     url=f'https://financialmodelingprep.com/api/v3/key-metrics/{symbol}?period=quarter&apikey={apikey}'
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
     df=pd.DataFrame([{key: value for key, value in item.items() if key in facs} for item in stuff])
@@ -3158,7 +3160,7 @@ def fmp_growth(sym,facs=[ "fiveYOperatingCFGrowthPerShare"]):
     "rdexpenseGrowth",
     "sgaexpensesGrowth"'''
     url=f'https://financialmodelingprep.com/api/v3/financial-growth/{sym}?period=annual&apikey={apikey}'
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
     stuff = stuff[0]
@@ -3218,7 +3220,7 @@ def fmp_isActive(syms):
 #------------------------------------------------------------------------------------------------
 def fmp_isin(isin):
     url = f"https://financialmodelingprep.com/api/v4/search/isin?isin={isin}&apikey="+apikey
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     return json.loads(data)
     
@@ -3238,7 +3240,7 @@ def fmp_transcript(sym, year=None, quarter=None, output='string'):
     else:
         url = f'https://financialmodelingprep.com/api/v4/earning_call_transcript?symbol={sym}&apikey={apikey}'
 
-    response = urlopen(url, cafile=certifi.where())
+    response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
     
