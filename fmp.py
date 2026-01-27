@@ -3249,6 +3249,14 @@ def fmp_transcript(sym, year=None, quarter=None, output='string'):
             print(f"No transcripts found for {sym}.")
             return None
 
+        # Handle nested list structure from v4 API
+        if isinstance(available[0], list):
+            available = available[0]
+
+        if not available:
+            print(f"No transcripts found for {sym}.")
+            return None
+
         # If user wants the list of available transcripts
         if output == 'list':
             return pd.DataFrame(available)
