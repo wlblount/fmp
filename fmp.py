@@ -3226,14 +3226,14 @@ def fmp_isin(isin):
     
 #-----------------------------------------------------------
 
-def fmp_transcript(sym, year=None, quarter=None, output='string'):
+def fmp_transcript(sym, year=None, quarter=None, output=None):
     '''
     Retrieves earning call transcripts with a structured header.
     - If year and quarter provided: Returns that specific transcript.
     - If not provided: Returns the most recent transcript available.
-    - output='string': Returns clean text with header (default).
-    - output='print': Prints text with header to screen.
-    - output='file': Saves text with header to '[sym]_[year]_Q[quarter].txt'.
+    - output=None: Returns LLM-optimized text (unwrapped) - default.
+    - output='print': Prints formatted text (wrapped) to screen.
+    - output='file': Saves formatted text (wrapped) to '[sym]_[year]_Q[quarter].txt'.
     - output='list': Returns DataFrame of all available transcripts.
     '''
     sym = sym.upper()
@@ -3264,7 +3264,7 @@ def fmp_transcript(sym, year=None, quarter=None, output='string'):
     date_time = transcript_data.get('date', 'Unknown Date')
     raw_text = transcript_data.get('content', '')
 
-    # Build the structured Header for the LLM
+    # Build the structured Header
     header = f"SYMBOL: {sym}\n"
     header += f"QUARTER: Q{quarter}\n"
     header += f"YEAR: {year}\n"
@@ -3297,14 +3297,18 @@ def fmp_transcript(sym, year=None, quarter=None, output='string'):
         flags=re.MULTILINE
     )
 
-    # Wrap each paragraph at 80 characters
-    paragraphs = formatted_text.strip().split('\n\n')
-    wrapped_paragraphs = []
-    for para in paragraphs:
-        wrapped = textwrap.fill(para.strip(), width=80)
-        wrapped_paragraphs.append(wrapped)
+    # For print/file: wrap at 80 characters for readability
+    if output in ('print', 'file'):
+        paragraphs = formatted_text.strip().split('\n\n')
+        wrapped_paragraphs = []
+        for para in paragraphs:
+            wrapped = textwrap.fill(para.strip(), width=80)
+            wrapped_paragraphs.append(wrapped)
+        clean_body = '\n\n'.join(wrapped_paragraphs)
+    else:
+        # For LLM use: no wrapping, just clean paragraphs
+        clean_body = formatted_text.strip()
 
-    clean_body = '\n\n'.join(wrapped_paragraphs)
     full_output = header + clean_body
 
     # Handle output flags
@@ -3319,4 +3323,4 @@ def fmp_transcript(sym, year=None, quarter=None, output='string'):
         print(f"Transcript with header saved to {filename}")
         return None
 
-    return full_output  # Default: return as string
+    return full_output  # Default: return LLM-optimized string
