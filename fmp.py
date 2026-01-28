@@ -2799,6 +2799,26 @@ def fmp_divHist(sym):
 
 #-------------------------------------------------------
 
+def fmp_empCount(symbol):
+    '''
+    Historical Employee Count from SEC filings
+    input: symbol as string (stock ticker)
+    returns: Series with filingDate as index and employeeCount as values
+    '''
+    url = f"https://financialmodelingprep.com/api/v4/historical/employee_count?symbol={symbol}&apikey={apikey}"
+    response = urlopen(url, context=ssl_context)
+    data = response.read().decode("utf-8")
+    stuff = json.loads(data)
+
+    df = pd.DataFrame(stuff)
+    s = df.set_index('filingDate')['employeeCount']
+    s.index = pd.to_datetime(s.index)
+    s = s.sort_index(ascending=True)
+    s.name = 'employeeCount'
+    return s
+
+#-------------------------------------------------------
+
 def fmp_perfStats(s):
     '''
     input: Series or Datframe of prices
