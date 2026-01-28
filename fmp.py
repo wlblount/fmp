@@ -2799,26 +2799,6 @@ def fmp_divHist(sym):
 
 #-------------------------------------------------------
 
-def fmp_empCount(symbol):
-    '''
-    Historical Employee Count from SEC filings
-    input: symbol as string (stock ticker)
-    returns: Series with filingDate as index and employeeCount as values
-    '''
-    url = f"https://financialmodelingprep.com/api/v4/historical/employee_count?symbol={symbol}&apikey={apikey}"
-    response = urlopen(url, context=ssl_context)
-    data = response.read().decode("utf-8")
-    stuff = json.loads(data)
-
-    df = pd.DataFrame(stuff)
-    s = df.set_index('filingDate')['employeeCount']
-    s.index = pd.to_datetime(s.index)
-    s = s.sort_index(ascending=True)
-    s.name = 'employeeCount'
-    return s
-
-#-------------------------------------------------------
-
 def fmp_perfStats(s):
     '''
     input: Series or Datframe of prices
@@ -3246,57 +3226,101 @@ def fmp_isin(isin):
     
 #-----------------------------------------------------------
 
-def fmp_transcript(sym, year=None, quarter=None, output='string'):
+def fmp_transcript(sym, year=None, quarter=None, output=None):
     '''
     Retrieves earning call transcripts with a structured header.
-    - output='string': Returns clean text with header (default).
-    - output='print': Prints text with header to screen.
-    - output='file': Saves text with header to '[sym]_[year]_Q[quarter].txt'.
+    - If year and quarter provided: Returns that specific transcript.
+    - If not provided: Returns the most recent transcript available.
+    - output=None: Returns LLM-optimized text (unwrapped) - default.
+    - output='print': Prints formatted text (wrapped) to screen.
+    - output='file': Saves formatted text (wrapped) to '[sym]_[year]_Q[quarter].txt'.
+    - output='list': Returns DataFrame of all available transcripts.
     '''
     sym = sym.upper()
-    
+
+    # Build URL - v3 endpoint works with or without year/quarter
     if year and quarter:
         url = f'https://financialmodelingprep.com/api/v3/earning_call_transcript/{sym}?quarter={quarter}&year={year}&apikey={apikey}'
     else:
-        url = f'https://financialmodelingprep.com/api/v4/earning_call_transcript?symbol={sym}&apikey={apikey}'
+        # Without year/quarter, returns all transcripts (most recent first)
+        url = f'https://financialmodelingprep.com/api/v3/earning_call_transcript/{sym}?apikey={apikey}'
 
     response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff = json.loads(data)
-    
+
     if not stuff:
-        print(f"No data found for {sym}.")
-        return None if year else pd.DataFrame()
+        print(f"No transcripts found for {sym}.")
+        return None
 
-    if year and quarter:
-        # 1. Extract metadata and raw text
-        transcript_data = stuff[0]
-        date_time = transcript_data.get('date', 'Unknown Date')
-        raw_text = transcript_data.get('content', '')
-        
-        # 2. Build the structured Header for the LLM
-        header = f"SYMBOL: {sym}\n"
-        header += f"QUARTER: Q{quarter}\n"
-        header += f"YEAR: {year}\n"
-        header += f"DATE/TIME: {date_time}\n"
-        header += f"--- START OF TRANSCRIPT ---\n\n"
-        
-        # 3. Clean the text body
-        clean_body = " ".join(raw_text.split()) 
-        full_output = header + clean_body
-        
-        # 4. Handle output flags
-        if output == 'print':
-            print(full_output)
-            return None
-        
-        elif output == 'file':
-            filename = f"{sym}_{year}_Q{quarter}.txt"
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(full_output)
-            print(f"Transcript with header saved to {filename}")
-            return None
-        
-        return full_output # Default: return as string
+    # If user wants the list of all available transcripts
+    if output == 'list':
+        return pd.DataFrame(stuff)
 
-    return pd.DataFrame(stuff)
+    # Get the first (most recent) transcript
+    transcript_data = stuff[0]
+    year = transcript_data.get('year')
+    quarter = transcript_data.get('quarter')
+    date_time = transcript_data.get('date', 'Unknown Date')
+    raw_text = transcript_data.get('content', '')
+
+    # Build the structured Header
+    header = f"SYMBOL: {sym}\n"
+    header += f"QUARTER: Q{quarter}\n"
+    header += f"YEAR: {year}\n"
+    header += f"DATE/TIME: {date_time}\n"
+    header += f"--- START OF TRANSCRIPT ---\n\n"
+
+    # Clean and format the text body
+    import re
+    import textwrap
+
+    # Clean up whitespace first
+    clean_text = " ".join(raw_text.split())
+
+    # Find speaker patterns (e.g., "John Smith:" or "Operator:")
+    # Insert line breaks before each speaker
+    formatted_text = re.sub(
+        r'([A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*)*)\s*:',
+        r'\n\n\1:',
+        clean_text
+    )
+
+    # Make speaker names uppercase (name followed by colon at start of line)
+    def uppercase_speaker(match):
+        return match.group(1).upper() + ':'
+
+    formatted_text = re.sub(
+        r'^([A-Za-z]+(?:\s+[A-Za-z]+)*):',
+        uppercase_speaker,
+        formatted_text,
+        flags=re.MULTILINE
+    )
+
+    # For print/file: wrap at 80 characters for readability
+    if output in ('print', 'file'):
+        paragraphs = formatted_text.strip().split('\n\n')
+        wrapped_paragraphs = []
+        for para in paragraphs:
+            wrapped = textwrap.fill(para.strip(), width=80)
+            wrapped_paragraphs.append(wrapped)
+        clean_body = '\n\n'.join(wrapped_paragraphs)
+    else:
+        # For LLM use: no wrapping, just clean paragraphs
+        clean_body = formatted_text.strip()
+
+    full_output = header + clean_body
+
+    # Handle output flags
+    if output == 'print':
+        print(full_output)
+        return None
+
+    elif output == 'file':
+        filename = f"{sym}_{year}_Q{quarter}.txt"
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(full_output)
+        print(f"Transcript with header saved to {filename}")
+        return None
+
+    return full_output  # Default: return LLM-optimized string
