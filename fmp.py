@@ -3345,3 +3345,42 @@ def fmp_empCount(symbol):
     s = s.sort_index(ascending=True)
     s.name = 'employeeCount'
     return s
+
+#-------------------------------------------------------------
+
+def fmp_etfExposure(symbol):
+    """
+    Fetches ETF stock exposure for a given ticker symbol, filters results, 
+    removes the 'assetExposure' column, and sets 'etfSymbol' as the index.
+    """
+    # Uses the global 'apikey' variable defined in your notebook
+    url = f"https://financialmodelingprep.com/api/v3/etf-stock-exposure/{symbol}?apikey={apikey}"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        
+        if not data:
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(data)
+        
+        # 1. Filtering logic: length < 5 and no "."
+        filtered_df = df[
+    (df['etfSymbol'].str.len() < 5) & 
+    (~df['etfSymbol'].str.contains(r'\.', regex=True))
+].copy()
+        
+        # 2. Drop "assetExposure" since it's redundant (always the input symbol)
+        # 3. Set "etfSymbol" as the index
+        final_df = filtered_df.drop(columns=['assetExposure']).set_index('etfSymbol')
+        
+        # 4. Sort descending by weightPercentage
+        sorted_df = final_df.sort_values(by='weightPercentage', ascending=False)
+        
+        return sorted_df
+    
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data: {e}")
+        return pd.DataFrame()
