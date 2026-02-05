@@ -6,6 +6,9 @@
 
 #     https://financialmodelingprep.com/developer/docs
 
+from IPython.display import display, Markdown
+
+
 import time
 import certifi
 import ssl
@@ -62,11 +65,19 @@ def fmp_price(syms, start='1960-01-01', end=str(dt.datetime.now().date()), facs=
     
     
    
-    url=requote_uri(f'https://financialmodelingprep.com/api/v3/historical-price-full/{syms}?from={start}&to={end}&apikey={apikey}')
+    url=requote_uri(f'https://financialmodelingprep.com/api/v3/historical-price-full/{syms}?from=     {start}&to={end}&apikey={apikey}')
     response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
-    stuff=json.loads(data)
-    l=stuff['historical'] 
+    # Updated fmp_price logic in fmp.py
+    stuff = json.loads(data)
+
+    # Safety Check: Does 'historical' exist?
+    if 'historical' not in stuff:
+    # Optional: Print a warning so you know which symbol failed
+        print(f"Warning: No historical data found for symbol in response.") 
+        return pd.DataFrame() # Return empty DF so the loop can continue
+
+    l = stuff['historical']
     idx = [sub['date'] for sub in l]
     idx=pd.to_datetime(idx)
     df = pd.DataFrame([[sub[k] for k in facs] for sub in l], columns=facs, index=idx)
@@ -116,15 +127,25 @@ def fmp_priceLoop(syms, start='1960-01-01', end=str(dt.datetime.now().date()), f
     returns df: for single sym column names are facs, for mult sym column names are sym:facs
     '''
     df=pd.DataFrame()
+    # In fmp.py inside fmp_priceLoop function
+
     if supress:
         for i in syms:
-            dff=fmp_price(i, start=start, end=end, facs=[fac])
-            df[i]=dff
-      
+            dff = fmp_price(i, start=start, end=end, facs=[fac])
+        
+            # NEW: Check if dff is empty before assigning
+            if not dff.empty:
+                df[i] = dff
+            else:
+                print(f"Skipping {i}: No data returned.")
+
     else:
+        # Do the same check for the non-supressed loop if you use it
         for i in notebook.tqdm(syms, disable=False):
-            dff=fmp_price(i, start=start, end=end, facs=[fac])
-            df[i]=dff
+            dff = fmp_price(i, start=start, end=end, facs=[fac])
+            
+            if not dff.empty:
+                df[i] = dff
    
     return df
 
@@ -2376,44 +2397,83 @@ Returns:
 
 
 #---------------------------------------------------------------
-def get_sectors():
-    """Retrieve the list of sectors using FMP API."""
-    url = f"https://financialmodelingprep.com/api/v3/sectors-list?apikey={apikey}"
-    response = requests.get(url)
-    return response.json()
 
-def get_industries_by_sector(sector):
-    """Retrieve the list of industries for a given sector using FMP API."""
-    url = f"https://financialmodelingprep.com/api/v3/stock-screener?sector={sector}&apikey={apikey}"
-    response = requests.get(url)
-    data = response.json()
-    
-    # Extract unique industries from the response
-    industries = {item['industry'] for item in data if 'industry' in item}
-    return sorted(industries)  # Alphabetize industries
+# Ensure apikey is defined globally in your file
+# apikey = '...' 
 
 def build_sector_industry_map():
-    """Build a complete dictionary mapping sectors to industries."""
-    sectors = get_sectors()
-    sector_industry_map = defaultdict(list)
+    """
+    Retrieves all stocks and builds a Sector -> Industry map in ONE request.
+    Relies on the global 'apikey' variable.
+    """
+    url = f"https://financialmodelingprep.com/api/v3/stock-screener?limit=10000&apikey={apikey}"
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        
+        sector_map = defaultdict(set)
+        
+        for item in data:
+            sec = item.get('sector')
+            ind = item.get('industry')
+            if sec and ind:
+                sector_map[sec].add(ind)
+        
+        return {k: sorted(list(v)) for k, v in sector_map.items()}
 
-    # Loop through each sector and fetch its industries
-    for sector in sectors:
-        industries = get_industries_by_sector(sector)
-        sector_industry_map[sector] = industries
+    except requests.exceptions.RequestException as e:
+        print(f"API Request failed: {e}")
+        return {}
 
-    return sector_industry_map
+def fmp_sectInd(sector=None):
+    """
+    Display the industries for a specific sector, or all sectors if left blank.
 
-def fmp_sectInd():
-    """Display the sector-industry mapping in Markdown format with alphabetical order."""
+    Parameters:
+    -----------
+    sector : str, optional
+        The specific sector to filter by (Case Sensitive). 
+        If None, displays all sectors and industries.
+
+    Available Sectors:
+    ------------------
+    - Basic Materials
+    - Communication Services
+    - Consumer Cyclical
+    - Consumer Defensive
+    - Energy
+    - Financial Services
+    - Healthcare
+    - Industrials
+    - Real Estate
+    - Technology
+    - Utilities
+    """
     sector_industry_map = build_sector_industry_map()
 
-    # Print each sector and its industries using Markdown formatting
-    for sector, industries in sector_industry_map.items():
-        display(Markdown(f"**{sector}:**"))
-        for industry in industries:
-            display(Markdown(f"- {industry}"))
+    if not sector_industry_map:
+        print("No data found.")
+        return
 
+    # If a specific sector is requested, filter the map
+    if sector:
+        # Check if the sector exists in our map
+        if sector in sector_industry_map:
+            display(Markdown(f"**{sector} Industries:**"))
+            for industry in sector_industry_map[sector]:
+                display(Markdown(f"- {industry}"))
+        else:
+            print(f"Sector '{sector}' not found. Please check the docstring for valid sector names.")
+            
+    # If no sector is provided, show everything (default behavior)
+    else:
+        for sec in sorted(sector_industry_map.keys()):
+            industries = sector_industry_map[sec]
+            display(Markdown(f"**{sec}:**"))
+            for industry in industries:
+                display(Markdown(f"- {industry}"))
 
 #----------------------------------------------------------------------------------------
 def fmp_plotMult(sym = 'COIN', start=None):
