@@ -567,6 +567,235 @@ def fmp_baltsC(sym, facs=None, period='quarter', limit=400,
     except Exception as e:
         print(f"Error in fmp_balts for {sym}: {e}")
         return pd.DataFrame()
+
+#--------------------------------------------------------------------
+##MOD 02/05/2026  7:19 AM
+
+def fmp_balFmt(df, add_ratios=False, add_asset_composition=False):
+    """
+    Format balance sheet data from fmp_balts() for human readability.
+    
+    Parameters:
+    -----------
+    df : DataFrame
+        Raw output from fmp_balts() with dates in rows, tags in columns
+    add_ratios : bool, default False
+        Add Current Ratio, Quick Ratio, and Debt-to-Equity at bottom
+    add_asset_composition : bool, default False
+        Add '% of Total Assets' row below each asset line item
+    
+    Returns:
+    --------
+    DataFrame with friendly names, scaled values, and optional ratios/percentages
+    Also prints title indicating scale (K/M/B)
+    
+    Example:
+    --------
+    >>> raw_df = fmp_balts('AAPL', period='quarter', limit=12)
+    >>> formatted = format_balance_sheet(raw_df, add_ratios=True, add_asset_composition=True)
+    """
+    
+    # Friendly name mapping for all standard FMP balance sheet tags
+    friendly_names = {
+        'date': 'Date',
+        'reportedCurrency': 'Currency',
+        'calendarYear': 'Year',
+        'period': 'Quarter',
+        'fillingDate': 'Filing Date',
+        'acceptedDate': 'Accepted Date',
+        'cashAndCashEquivalents': 'Cash & Equivalents',
+        'shortTermInvestments': 'Short-term Investments',
+        'netReceivables': 'Net Receivables',
+        'inventory': 'Inventory',
+        'otherCurrentAssets': 'Other Current Assets',
+        'totalCurrentAssets': 'Total Current Assets',
+        'propertyPlantEquipmentNet': 'PP&E (Net)',
+        'goodwill': 'Goodwill',
+        'intangibleAssets': 'Intangible Assets',
+        'longTermInvestments': 'Long-term Investments',
+        'taxAssets': 'Tax Assets',
+        'otherNonCurrentAssets': 'Other Non-Current Assets',
+        'totalNonCurrentAssets': 'Total Non-Current Assets',
+        'totalAssets': 'Total Assets',
+        'accountPayables': 'Accounts Payable',
+        'shortTermDebt': 'Short-term Debt',
+        'taxPayables': 'Tax Payables',
+        'deferredRevenue': 'Deferred Revenue',
+        'otherCurrentLiabilities': 'Other Current Liabilities',
+        'totalCurrentLiabilities': 'Total Current Liabilities',
+        'longTermDebt': 'Long-term Debt',
+        'capitalLeaseObligations': 'Capital Lease Obligations',
+        'deferredTaxLiabilitiesNonCurrent': 'Deferred Tax Liabilities',
+        'otherNonCurrentLiabilities': 'Other Non-Current Liabilities',
+        'totalNonCurrentLiabilities': 'Total Non-Current Liabilities',
+        'totalLiabilities': 'Total Liabilities',
+        'commonStock': 'Common Stock',
+        'retainedEarnings': 'Retained Earnings',
+        'accumulatedOtherComprehensiveIncomeLoss': 'Accumulated Other Comprehensive Income',
+        'totalStockholdersEquity': 'Shareholders\' Equity',
+        'totalLiabilitiesAndTotalEquity': 'Total Liabilities & Equity',
+        'totalInvestments': 'Total Investments',
+        'totalDebt': 'Total Debt',
+        'netDebt': 'Net Debt',
+        'equity_error_delta': 'Equity Error Delta'
+    }
+    
+    # Asset tags for composition percentages
+    asset_tags = [
+        'cashAndCashEquivalents',
+        'shortTermInvestments',
+        'netReceivables',
+        'inventory',
+        'otherCurrentAssets',
+        'totalCurrentAssets',
+        'propertyPlantEquipmentNet',
+        'goodwill',
+        'intangibleAssets',
+        'longTermInvestments',
+        'taxAssets',
+        'otherNonCurrentAssets',
+        'totalNonCurrentAssets'
+    ]
+    
+    # Make a copy and transpose (tags to index, dates to columns)
+    df_work = df.copy()
+    df_work = df_work.T
+    df_work = df_work.drop(['fillingDate', 'acceptedDate'], errors='ignore')
+    
+    # Get the Total Assets row to determine scaling
+    if 'totalAssets' not in df_work.index:
+        raise ValueError("totalAssets not found in data - cannot determine scale")
+    
+    # Use the first date column's Total Assets value for scaling decision
+    first_col = df_work.columns[0]
+    total_assets_value = df_work.loc['totalAssets', first_col]
+    
+    # Determine scale based on Total Assets
+    if total_assets_value < 1_000_000:
+        scale_factor = 1
+        scale_label = 'Units'
+    elif total_assets_value < 1_000_000_000:
+        scale_factor = 1_000
+        scale_label = 'Thousands'
+    else:
+        scale_factor = 1_000_000
+        scale_label = 'Millions'
+    
+    # Identify numeric rows (exclude date/period/currency type rows)
+    non_numeric_rows = ['date', 'reportedCurrency', 'calendarYear', 'period']
+    numeric_rows = [idx for idx in df_work.index if idx not in non_numeric_rows]
+    
+    # Scale numeric values
+    for col in df_work.columns:
+        for row in numeric_rows:
+            if pd.notna(df_work.loc[row, col]):
+                df_work.loc[row, col] = df_work.loc[row, col] / scale_factor
+    
+    # Apply friendly names to index
+    df_work.index = df_work.index.map(lambda x: friendly_names.get(x, x))
+    
+    # Add asset composition percentages if requested
+    if add_asset_composition:
+        rows_to_insert = []
+        
+        for tag in asset_tags:
+            if tag in df.columns:
+                friendly_tag = friendly_names.get(tag, tag)
+                # Find position of this tag in the formatted DataFrame
+                if friendly_tag in df_work.index:
+                    # Calculate percentage of Total Assets for each date column
+                    pct_row = pd.Series(index=df_work.columns, name='  % of Total Assets', dtype=float)
+                    
+                    for col in df_work.columns:
+                        # Get the actual unscaled values from original df
+                        col_idx = df.index[df.index.get_loc(col)]
+                        asset_val = df.loc[col_idx, tag]
+                        total_assets = df.loc[col_idx, 'totalAssets']
+                        
+                        if pd.notna(asset_val) and pd.notna(total_assets) and total_assets != 0:
+                            pct = (asset_val / total_assets) * 100
+                            pct_row[col] = pct
+                        else:
+                            pct_row[col] = np.nan
+                    
+                    rows_to_insert.append((friendly_tag, pct_row))
+        
+        # Insert percentage rows in reverse order to maintain position
+        for friendly_tag, pct_row in reversed(rows_to_insert):
+            idx_pos = df_work.index.get_loc(friendly_tag)
+            # Split the DataFrame and insert the percentage row
+            df_top = df_work.iloc[:idx_pos+1]
+            df_bottom = df_work.iloc[idx_pos+1:]
+            df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
+    
+    # Add ratios if requested
+    if add_ratios:
+        ratio_rows = []
+        
+        # Current Ratio = Current Assets / Current Liabilities
+        current_ratio = pd.Series(index=df_work.columns, name='Current Ratio', dtype=object)
+        for col in df_work.columns:
+            try:
+                col_idx = df.index[df.index.get_loc(col)]
+                ca = df.loc[col_idx, 'totalCurrentAssets']
+                cl = df.loc[col_idx, 'totalCurrentLiabilities']
+                if pd.notna(ca) and pd.notna(cl) and cl != 0:
+                    current_ratio[col] = f"{(ca / cl):.2f}"
+                else:
+                    current_ratio[col] = "N/A"
+            except:
+                current_ratio[col] = "N/A"
+        ratio_rows.append(current_ratio)
+        
+        # Quick Ratio = (Current Assets - Inventory) / Current Liabilities
+        quick_ratio = pd.Series(index=df_work.columns, name='Quick Ratio', dtype=object)
+        for col in df_work.columns:
+            try:
+                col_idx = df.index[df.index.get_loc(col)]
+                ca = df.loc[col_idx, 'totalCurrentAssets']
+                inv = df.loc[col_idx, 'inventory'] if 'inventory' in df.columns else 0
+                cl = df.loc[col_idx, 'totalCurrentLiabilities']
+                if pd.notna(ca) and pd.notna(cl) and cl != 0:
+                    inv_val = inv if pd.notna(inv) else 0
+                    quick_ratio[col] = f"{((ca - inv_val) / cl):.2f}"
+                else:
+                    quick_ratio[col] = "N/A"
+            except:
+                quick_ratio[col] = "N/A"
+        ratio_rows.append(quick_ratio)
+        
+        # Debt-to-Equity = Total Debt / Shareholders' Equity
+        dte_ratio = pd.Series(index=df_work.columns, name='Debt-to-Equity', dtype=object)
+        for col in df_work.columns:
+            try:
+                col_idx = df.index[df.index.get_loc(col)]
+                td = df.loc[col_idx, 'totalDebt']
+                se = df.loc[col_idx, 'totalStockholdersEquity']
+                if pd.notna(td) and pd.notna(se) and se != 0:
+                    dte_ratio[col] = f"{(td / se):.2f}"
+                else:
+                    dte_ratio[col] = "N/A"
+            except:
+                dte_ratio[col] = "N/A"
+        ratio_rows.append(dte_ratio)
+        
+        # Append ratio rows at the bottom
+        for ratio_row in ratio_rows:
+            df_work = pd.concat([df_work, pd.DataFrame([ratio_row])])
+    
+    # Format numeric values (except percentages and ratios)
+    for idx in df_work.index:
+        if '% of Total Assets' not in str(idx) and idx not in ['Current Ratio', 'Quick Ratio', 'Debt-to-Equity']:
+            for col in df_work.columns:
+                val = df_work.loc[idx, col]
+                if isinstance(val, (int, float)) and pd.notna(val):
+                    df_work.loc[idx, col] = f"{val:,.2f}"
+    
+    # Print title with scale
+    print(f"Balance Sheet (in {scale_label})")
+    print()
+    
+    return df_work
 #--------------------------------------------------------------------
 ## MOD  01/18/2026 7:00 AM
 
@@ -609,8 +838,90 @@ def fmp_baltsar(sym, facs=None, period='quarter', limit=400):
         print(f"Error in fmp_baltsar for {sym}: {e}")
         return pd.DataFrame()
 #----------------------------------------------------------------------------
+#MOD 02/02/2026  8:25 AM
 
+def fmp_balarFmt(df, asset_tag='assets'):
+    """
+    Format as-reported balance sheet with K/M/B scaling.
+    Keeps all original tag names unchanged.
+    
+    Parameters:
+    -----------
+    df : DataFrame
+        Raw output from fmp_baltsar() with dates in rows, tags in columns
+    asset_tag : str
+        Tag name to use for determining scale (default 'assets')
+        Can be 'assets', 'totalassets', or any column name in the data
+    
+    Returns:
+    --------
+    DataFrame with scaled values formatted with commas and 2 decimals
+    Also prints title indicating scale (K/M/B)
+    
+    Example:
+    --------
+    >>> raw_df = fmp_baltsar('F', period='quarter', limit=12)
+    >>> formatted = format_as_reported(raw_df, asset_tag='assets')
+    """
+    
+    # Make a copy and transpose (tags to index, dates to columns)
+    df_work = df.copy()
+    df_work = df_work.T
+    
+    # Find the asset tag (case-insensitive search)
+    asset_tag_lower = asset_tag.lower()
+    matching_tags = [idx for idx in df_work.index if asset_tag_lower in str(idx).lower()]
+    
+    if not matching_tags:
+        raise ValueError(f"Asset tag '{asset_tag}' not found in data. Available tags: {list(df_work.index)}")
+    
+    # Use the first matching tag
+    found_asset_tag = matching_tags[0]
+    
+    # Use the first date column's asset value for scaling decision
+    first_col = df_work.columns[0]
+    asset_value = df_work.loc[found_asset_tag, first_col]
+    
+    # Determine scale based on asset value
+    if asset_value < 1_000_000:
+        scale_factor = 1
+        scale_label = 'Units'
+    elif asset_value < 1_000_000_000:
+        scale_factor = 1_000
+        scale_label = 'Thousands'
+    else:
+        scale_factor = 1_000_000
+        scale_label = 'Millions'
+    
+    # Identify numeric rows (exclude date/period/symbol type rows)
+    non_numeric_rows = ['date', 'symbol', 'period', 'reportedCurrency', 'fillingDate', 'acceptedDate']
+    numeric_rows = [idx for idx in df_work.index if idx not in non_numeric_rows]
+    
+    # Scale numeric values
+    for col in df_work.columns:
+        for row in numeric_rows:
+            if row in df_work.index and pd.notna(df_work.loc[row, col]):
+                try:
+                    df_work.loc[row, col] = df_work.loc[row, col] / scale_factor
+                except (TypeError, ValueError):
+                    # Skip non-numeric values
+                    pass
+    
+    # Format numeric values with commas and 2 decimals
+    for idx in numeric_rows:
+        if idx in df_work.index:
+            for col in df_work.columns:
+                val = df_work.loc[idx, col]
+                if isinstance(val, (int, float)) and pd.notna(val):
+                    df_work.loc[idx, col] = f"{val:,.2f}"
+    
+    # Print title with scale
+    print(f"Balance Sheet (in {scale_label})")
+    print()
+    
+    return df_work
 
+#-----------------------------------------------------------------------------
 # 2026-01-19 03:23:22
 def fmp_incts(sym, facs=None, period='quarter', limit=400):
     '''
