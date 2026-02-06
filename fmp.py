@@ -1007,6 +1007,195 @@ def fmp_incts(sym, facs=None, period='quarter', limit=400):
         print(f"Error in fmp_incts for {sym}: {e}")
         return pd.DataFrame()
 #-----------------------------------------------------	
+#MOD 2/6/26 5:52PM
+def fmp_incmFmt(df, add_pct_of_revenue=False, filename='income_statement.html'):
+    r"""
+    Formats a Financial Modeling Prep (FMP:NASDAQ) income statement DataFrame into an interactive HTML report.
+
+    This function transforms raw income statement data into a professional HTML document with
+    automatic scaling, financial hierarchy styling, and Chart.js for interactive row-level trend analysis.
+
+    Args:
+        df (pd.DataFrame): Raw income statement data (metrics as columns, periods as rows).
+        add_pct_of_revenue (bool): If True, inserts "% of Revenue" rows beneath major line items.
+        filename (str): Output path for the HTML file.
+
+    Returns:
+        None: Writes file to disk and opens it in the default web browser.
+
+    Notes:
+        ### Scaling Logic
+        The function determines the scale based on the first column's 'Revenue':
+        - If Revenue $\ge 1,000,000,000$, values are divided by $1,000,000$ (Millions).
+        - Otherwise, values are divided by $1,000$ (Thousands).
+
+        ### Formulas & Metrics
+        When add_pct_of_revenue is enabled:
+        - $\text{Line Item \%} = \left( \frac{\text{Line Item Value}}{\text{Revenue}} \right) \times 100$
+    """
+    friendly_names = {
+        'date': 'Date', 
+        'reportedCurrency': 'Currency', 
+        'calendarYear': 'Year', 
+        'period': 'Quarter',
+        'revenue': 'Revenue',
+        'costOfRevenue': 'Cost of Revenue',
+        'grossProfit': 'Gross Profit',
+        'researchAndDevelopmentExpenses': 'R&D Expenses',
+        'generalAndAdministrativeExpenses': 'G&A Expenses',
+        'sellingAndMarketingExpenses': 'Sales & Marketing Expenses',
+        'otherExpenses': 'Other Expenses',
+        'operatingExpenses': 'Operating Expenses',
+        'depreciationAndAmortization': 'Depreciation & Amortization',
+        'operatingIncome': 'Operating Income',
+        'ebitda': 'EBITDA',
+        'totalOtherIncomeExpensesNet': 'Total Other Income/Expenses',
+        'interestIncome': 'Interest Income',
+        'interestExpense': 'Interest Expense',
+        'incomeBeforeTax': 'Income Before Tax',
+        'incomeTaxExpense': 'Income Tax Expense',
+        'netIncome': 'Net Income',
+        'eps': 'EPS (Basic)',
+        'epsdiluted': 'EPS (Diluted)',
+        'weightedAverageShsOut': 'Weighted Avg Shares Outstanding',
+        'weightedAverageShsOutDil': 'Weighted Avg Shares Outstanding (Diluted)'
+    }
+
+    df_work = df.copy().T
+    df_work = df_work.drop(['fillingDate', 'acceptedDate'], errors='ignore')
+    
+    # Determine Scale based on Revenue
+    revenue_val = pd.to_numeric(df_work.loc['revenue', df_work.columns[0]], errors='coerce')
+    scale_factor = 1_000_000 if revenue_val >= 1_000_000_000 else 1_000
+    scale_label = 'Millions' if scale_factor == 1_000_000 else 'Thousands'
+
+    # ADD % OF REVENUE
+    if add_pct_of_revenue:
+        # Tags to add percentage rows for
+        pct_tags = [
+            'costOfRevenue', 'grossProfit', 'researchAndDevelopmentExpenses',
+            'generalAndAdministrativeExpenses', 'sellingAndMarketingExpenses',
+            'otherExpenses', 'operatingExpenses', 'depreciationAndAmortization',
+            'operatingIncome', 'ebitda', 'totalOtherIncomeExpensesNet',
+            'interestIncome', 'interestExpense', 'incomeBeforeTax',
+            'incomeTaxExpense', 'netIncome'
+        ]
+        
+        rows_to_insert = []
+        for tag in pct_tags:
+            if tag in df.columns:
+                pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+                for col in df_work.columns:
+                    val = pd.to_numeric(df.loc[df.index[df.index.get_loc(col)], tag], errors='coerce')
+                    revenue = pd.to_numeric(df.loc[df.index[df.index.get_loc(col)], 'revenue'], errors='coerce')
+                    pct_row[col] = (val / revenue * 100) if revenue != 0 else np.nan
+                rows_to_insert.append((tag, pct_row))
+
+        # Insert percentage rows in reverse order to maintain positioning
+        for parent_tag, pct_row in reversed(rows_to_insert):
+            if parent_tag in df_work.index:
+                idx_pos = df_work.index.get_loc(parent_tag)
+                df_top = df_work.iloc[:idx_pos+1]
+                df_bottom = df_work.iloc[idx_pos+1:]
+                pct_row.name = f"% of Revenue ({friendly_names.get(parent_tag, parent_tag)})"
+                df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
+
+    # Initial Scaling for main numeric rows (exclude metadata and calculated %)
+    meta_rows = ['date', 'reportedCurrency', 'calendarYear', 'period']
+    for row in df_work.index:
+        if row not in meta_rows and "%" not in str(row) and row not in ['eps', 'epsdiluted', 'weightedAverageShsOut', 'weightedAverageShsOutDil']:
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
+                if pd.notna(val) and row in friendly_names:
+                    df_work.loc[row, col] = val / scale_factor
+
+    # Apply UI Hierarchy
+    grand_totals = ['Revenue', 'Gross Profit', 'Operating Income', 'Net Income', 'EBITDA']
+    subtotals = ['Operating Expenses', 'Income Before Tax']
+
+    def apply_styles(label):
+        clean = friendly_names.get(label, label)
+        if clean in grand_totals: 
+            return f"<strong>{clean}</strong>"
+        if clean in subtotals: 
+            return f"&nbsp;&nbsp;{clean}"
+        if "%" in str(label): 
+            return f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<em>{label}</em>"
+        if clean in ['EPS (Basic)', 'EPS (Diluted)', 'Weighted Avg Shares Outstanding', 'Weighted Avg Shares Outstanding (Diluted)']:
+            return f"&nbsp;&nbsp;{clean}"
+        return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
+
+    df_work.index = [apply_styles(idx) for idx in df_work.index]
+
+    # Cell Value Formatting
+    for idx in df_work.index:
+        for col in df_work.columns:
+            val = df_work.loc[idx, col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                # Different precision for EPS vs other values
+                if 'EPS' in str(idx):
+                    fmt = "{:.2f}"
+                elif "%" in str(idx):
+                    fmt = "{:.2f}"
+                elif 'Shares' in str(idx):
+                    fmt = "{:,.0f}"
+                else:
+                    fmt = "{:,.2f}"
+                df_work.loc[idx, col] = fmt.format(val)
+
+    # HTML Output with Charting Logic
+    table_html = df_work.to_html(classes='income-statement', border=0, escape=False)
+    
+    styled_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {{ font-family: -apple-system, system-ui, sans-serif; padding: 40px; background-color: #f0f2f5; }}
+        .container {{ background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+        h2 {{ color: #1a1a1a; border-bottom: 3px solid #2196F3; padding-bottom: 15px; margin-bottom: 20px; }}
+        .income-statement {{ border-collapse: collapse; width: 100%; font-size: 13px; color: #333; }}
+        .income-statement thead th {{ background-color: #2196F3; color: white; padding: 12px 10px; text-align: right; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }}
+        .income-statement tbody th {{ text-align: left !important; padding: 8px 15px; border: 1px solid #e0e0e0; border-right: 2px solid #ccc; white-space: nowrap; cursor: pointer; font-family: "SF Mono", monospace; background-color: #fff; }}
+        .income-statement tbody th:hover {{ background-color: #e3f2fd; color: #1565c0; }}
+        .income-statement tbody td {{ border: 1px solid #e0e0e0; padding: 8px; text-align: right; }}
+        .income-statement tbody tr:nth-child(even) {{ background-color: #fafafa; }}
+        strong {{ font-weight: 800 !important; color: #000; }}
+        em {{ color: #777; font-size: 0.85em; }}
+        #chartModal {{ display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); }}
+        .modal-content {{ background: white; margin: 5% auto; padding: 20px; border-radius: 12px; width: 80%; max-width: 900px; }}
+        .close {{ color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }}
+    </style>
+</head>
+<body>
+    <div class="container"><h2>Income Statement (in {scale_label})</h2><div style="overflow-x: auto;">{table_html}</div></div>
+    <div id="chartModal"><div class="modal-content"><span class="close" onclick="closeModal()">&times;</span><canvas id="rowChart"></canvas></div></div>
+    <script>
+        let myChart = null;
+        document.querySelectorAll(".income-statement tbody th").forEach(header => {{
+            header.onclick = function() {{
+                const row = this.parentElement;
+                const label = this.innerText.trim();
+                const labels = Array.from(document.querySelectorAll(".income-statement thead th")).slice(1).map(th => th.innerText);
+                const data = Array.from(row.querySelectorAll("td")).map(td => parseFloat(td.innerText.replace(/,/g, '')));
+                document.getElementById("chartModal").style.display = "block";
+                if (myChart) myChart.destroy();
+                myChart = new Chart(document.getElementById('rowChart'), {{
+                    type: 'line', data: {{ labels, datasets: [{{ label, data, borderColor: '#2196F3', backgroundColor: 'rgba(33,150,243,0.1)', fill: true, tension: 0.3 }}] }}
+                }});
+            }};
+        }});
+        function closeModal() {{ document.getElementById("chartModal").style.display = "none"; }}
+    </script>
+</body>
+</html>
+"""
+    with open(filename, 'w', encoding='utf-8') as f: 
+        f.write(styled_html)
+    webbrowser.open('file://' + os.path.abspath(filename))
+
+#-----------------------------------------------------------------
 ## MOD  01/18/2026 7:00 AM
 
 def fmp_inctsar(sym, facs=None, period='quarter', limit=400):
@@ -2208,22 +2397,58 @@ def fmp_cormatrix(syms, start=60):
     
 #---------------------------------------------------------------------------------
     
+## MOD 2/6/26 7:56 am
+# 'apikey' is assumed to be assigned at the module level
 
-
-def fmp_filings(sym, limit=20):
-    url = f"https://financialmodelingprep.com/api/v3/sec_filings/{sym}?page=0&limit={limit}&apikey={apikey}"
-    df = pd.read_json(url)
-    try:
-       df = df[['acceptedDate', 'cik', 'type', 'link']]
-    except KeyError:
-        print("No Filings Available")
-        return None
+def fmp_filings(sym, filing_type=None, days_back=None, limit=100):
+    """
+    Fetches SEC filings for a given symbol.
     
+    Parameters:
+    - sym (str): Ticker symbol.
+    - filing_type (str): Specific form (e.g., '10-k', '10-q', '8-k', '4').
+    - days_back (int): Filter for filings within the last N days.
+    - limit (int): Max filings to fetch from the API.
+    
+    Common codes for 'filing_type':
+    - '10-k'   : Annual report
+    - '10-q'   : Quarterly report
+    - '8-k'    : Material events/Earnings releases
+    - '4'      : Insider transactions
+    - 'def 14a': Proxy statements (exec pay)
+    """
+    # Normalize type to lowercase as requested
+    f_type = filing_type.lower() if filing_type else None
+    
+    url = f"https://financialmodelingprep.com/api/v3/sec_filings/{sym}?page=0&limit={limit}&apikey={apikey}"
+    if f_type:
+        url += f"&type={f_type}"
+        
+    df = pd.read_json(url)
+    
+    if df.empty:
+        return None
+        
+    # Standardize columns and convert date
+    df = df[['acceptedDate', 'cik', 'type', 'link']]
+    df['acceptedDate'] = pd.to_datetime(df['acceptedDate'])
+    
+    # Apply date filter at the DataFrame level
+    if days_back:
+        threshold = datetime.now() - timedelta(days=days_back)
+        df = df[df['acceptedDate'] >= threshold]
+        
+    if df.empty:
+        print(f"No filings found for {sym} in the last {days_back} days.")
+        return None
+
     def make_clickable(val):
-        return f'<a target="_blank" href="{val}">{val}</a>'
+        return f'<a target="_blank" href="{val}">Link</a>'
     
     return df.style.format({'link': make_clickable})
-  
+
+# Usage: Get all 8-K filings from the last 30 days
+# fmp_filings('AMKR', filing_type='8-k', days_back=30)
     
 #-----------------------------------------------------------------------------------------
 
