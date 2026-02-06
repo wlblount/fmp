@@ -17,5 +17,7 @@ setup(
     author='BillBlount',
     author_email='',
     description='A package for accessing Financial Modeling Prep API',
-    url='https://github.com/wlblount/fmp',
+    url='https://github.com/wlblount/fmp-repo',
 )
+
+

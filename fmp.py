@@ -35,6 +35,8 @@ from matplotlib.ticker import FormatStrFormatter
 from IPython.display import display, HTML
 import os
 import bt
+import webbrowser
+
 from tvDatafeed import TvDatafeed, Interval
 # Delay slow imports
 def load_utils():
@@ -320,6 +322,208 @@ def fmp_balts(sym, facs=None, period='quarter', limit=400):
         print(f"Error in fmp_balts for {sym}: {e}")
         return pd.DataFrame()
 #---------------------------------------------------------------------------
+
+def fmp_baltsFmt(df, add_ratios=False, add_asset_composition=False, add_risk_metrics=False, filename='balance_sheet.html'):
+    r"""
+    Restored: Working Capital and RE/TA Risk Metrics.
+    Features: Asset/Liability % Composition, Ratios, Dynamic Indentation, and Charting.
+
+    **************Formats a Financial Modeling Prep (FMP:NASDAQ) balance sheet DataFrame into an interactive HTML report.
+
+    This function transforms raw financial data into a professional HTML document. It handles 
+    automatic scaling, applies financial hierarchy styling, and injects Chart.js for 
+    interactive row-level trend analysis.
+
+    Args:
+        df (pd.DataFrame): Raw balance sheet data (metrics as columns, periods as rows).
+        add_ratios (bool): If True, appends liquidity and leverage ratios.
+        add_asset_composition (bool): If True, inserts "% of Total Assets" for major line items.
+        add_risk_metrics (bool): If True, appends solvency and capital health metrics.
+        filename (str): Output path for the HTML file.
+
+    Returns:
+        None: Writes file to disk and opens it in the default web browser.
+
+    Notes:
+        ### Scaling Logic
+        The function determines the scale based on the first column's 'Total Assets':
+        - If Total Assets $\ge 1,000,000,000$, values are divided by $1,000,000$ (Millions).
+        - Otherwise, values are divided by $1,000$ (Thousands).
+
+        ### Formulas & Metrics
+        When optional flags are enabled, the following calculations are applied:
+
+        **1. Asset Composition**
+        - $\text{Line Item \%} = \left( \frac{\text{Line Item Value}}{\text{Total Assets}} \right) \times 100$
+
+        **2. Ratios**
+        - $\text{Current Ratio} = \frac{\text{Total Current Assets}}{\text{Total Current Liabilities}}$
+        - $\text{Debt-to-Equity} = \frac{\text{Total Debt}}{\text{Total Stockholders Equity}}$
+
+        **3. Risk Metrics**
+        - $\text{Working Capital} = \text{Total Current Assets} - \text{Total Current Liabilities}$
+        - $\text{TCE Ratio (Tangible Common Equity)} = \frac{\text{Equity} - \text{Goodwill} - \text{Intangibles}}{\text{Total Assets}} \times 100$
+        - $\text{RE/TA} = \left( \frac{\text{Retained Earnings}}{\text{Total Assets}} \right) \times 100$
+    """
+    friendly_names = {
+        'date': 'Date', 'reportedCurrency': 'Currency', 'calendarYear': 'Year', 'period': 'Quarter',
+        'cashAndCashEquivalents': 'Cash & Equivalents', 'shortTermInvestments': 'Short-term Investments',
+        'netReceivables': 'Net Receivables', 'inventory': 'Inventory', 'otherCurrentAssets': 'Other Current Assets',
+        'totalCurrentAssets': 'Total Current Assets', 'propertyPlantEquipmentNet': 'PP&E (Net)',
+        'goodwill': 'Goodwill', 'intangibleAssets': 'Intangible Assets', 'longTermInvestments': 'Long-term Investments',
+        'taxAssets': 'Tax Assets', 'otherNonCurrentAssets': 'Other Non-Current Assets',
+        'totalNonCurrentAssets': 'Total Non-Current Assets', 'totalAssets': 'Total Assets',
+        'accountPayables': 'Accounts Payable', 'shortTermDebt': 'Short-term Debt',
+        'taxPayables': 'Tax Payables', 'deferredRevenue': 'Deferred Revenue',
+        'otherCurrentLiabilities': 'Other Current Liabilities', 'totalCurrentLiabilities': 'Total Current Liabilities',
+        'longTermDebt': 'Long-term Debt', 'capitalLeaseObligations': 'Capital Lease Obligations',
+        'deferredTaxLiabilitiesNonCurrent': 'Deferred Tax Liabilities', 'otherNonCurrentLiabilities': 'Other Non-Current Liabilities',
+        'totalNonCurrentLiabilities': 'Total Non-Current Liabilities', 'totalLiabilities': 'Total Liabilities',
+        'commonStock': 'Common Stock', 'retainedEarnings': 'Retained Earnings',
+        'accumulatedOtherComprehensiveIncomeLoss': 'Accumulated Other Comprehensive Income',
+        'totalStockholdersEquity': 'Shareholders\' Equity', 'totalLiabilitiesAndTotalEquity': 'Total Liabilities & Equity',
+        'totalInvestments': 'Total Investments', 'totalDebt': 'Total Debt', 'netDebt': 'Net Debt'
+    }
+
+    df_work = df.copy().T
+    df_work = df_work.drop(['fillingDate', 'acceptedDate'], errors='ignore')
+    
+    # Determine Scale based on Total Assets
+    total_assets_val = pd.to_numeric(df_work.loc['totalAssets', df_work.columns[0]], errors='coerce')
+    scale_factor = 1_000_000 if total_assets_val >= 1_000_000_000 else 1_000
+    scale_label = 'Millions' if scale_factor == 1_000_000 else 'Thousands'
+
+    # 1. ADD COMPOSITION (%) - Assets & Liabilities
+    if add_asset_composition:
+        comp_tags = [
+            'cashAndCashEquivalents', 'shortTermInvestments', 'netReceivables', 'inventory', 
+            'otherCurrentAssets', 'totalCurrentAssets', 'propertyPlantEquipmentNet', 
+            'goodwill', 'intangibleAssets', 'longTermInvestments', 'taxAssets', 
+            'otherNonCurrentAssets', 'totalNonCurrentAssets',
+            'accountPayables', 'deferredRevenue', 'totalDebt', 'retainedEarnings'
+        ]
+        
+        rows_to_insert = []
+        for tag in comp_tags:
+            if tag in df.columns:
+                pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+                for col in df_work.columns:
+                    val = pd.to_numeric(df.loc[df.index[df.index.get_loc(col)], tag], errors='coerce')
+                    total = pd.to_numeric(df.loc[df.index[df.index.get_loc(col)], 'totalAssets'], errors='coerce')
+                    pct_row[col] = (val / total * 100) if total != 0 else np.nan
+                rows_to_insert.append((tag, pct_row))
+
+        for parent_tag, pct_row in reversed(rows_to_insert):
+            if parent_tag in df_work.index:
+                idx_pos = df_work.index.get_loc(parent_tag)
+                df_top = df_work.iloc[:idx_pos+1]
+                df_bottom = df_work.iloc[idx_pos+1:]
+                pct_row.name = f"% of Total Assets ({friendly_names.get(parent_tag, parent_tag)})"
+                df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
+
+    # 2. ADD RISK METRICS (Restored Working Capital and RE/TA)
+    if add_risk_metrics:
+        # Working Capital (Scaled)
+        wc = (pd.to_numeric(df['totalCurrentAssets']) - pd.to_numeric(df['totalCurrentLiabilities'])) / scale_factor
+        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(wc.values, index=df_work.columns, name='Working Capital')])])
+        
+        # TCE Ratio (%)
+        tce = ((pd.to_numeric(df['totalStockholdersEquity']) - pd.to_numeric(df['goodwill']) - pd.to_numeric(df['intangibleAssets'])) / pd.to_numeric(df['totalAssets'])) * 100
+        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(tce.values, index=df_work.columns, name='TCE Ratio (%)')])])
+
+        # RE/TA (%) - Retained Earnings / Total Assets
+        reta = (pd.to_numeric(df['retainedEarnings']) / pd.to_numeric(df['totalAssets'])) * 100
+        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(reta.values, index=df_work.columns, name='RE/TA (%)')])])
+
+    # 3. ADD RATIOS
+    if add_ratios:
+        curr_ratio = pd.to_numeric(df['totalCurrentAssets']) / pd.to_numeric(df['totalCurrentLiabilities'])
+        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(curr_ratio.values, index=df_work.columns, name='Current Ratio')])])
+        dte = pd.to_numeric(df['totalDebt']) / pd.to_numeric(df['totalStockholdersEquity'])
+        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(dte.values, index=df_work.columns, name='Debt-to-Equity')])])
+
+    # Initial Scaling for main numeric rows
+    meta_rows = ['date', 'reportedCurrency', 'calendarYear', 'period']
+    for row in df_work.index:
+        if row not in meta_rows and "%" not in str(row) and "Ratio" not in str(row) and row != 'Working Capital':
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
+                if pd.notna(val) and row in friendly_names:
+                    df_work.loc[row, col] = val / scale_factor
+
+    # Apply UI Hierarchy
+    grand_totals = ['Total Assets', 'Total Liabilities & Equity', 'Total Debt', 'Net Debt']
+    subtotals = ['Total Current Assets', 'Total Non-Current Assets', 'Total Current Liabilities', 'Total Non-Current Liabilities', 'Total Liabilities', "Shareholders' Equity"]
+
+    def apply_styles(label):
+        clean = friendly_names.get(label, label)
+        if clean in grand_totals: return f"<strong>{clean}</strong>"
+        if clean in subtotals: return f"&nbsp;&nbsp;{clean}"
+        if "%" in str(label): return f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<em>{label}</em>"
+        return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
+
+    df_work.index = [apply_styles(idx) for idx in df_work.index]
+
+    # Cell Value Formatting
+    for idx in df_work.index:
+        for col in df_work.columns:
+            val = df_work.loc[idx, col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                fmt = "{:.2f}" if ("%" in str(idx) or "Ratio" in str(idx)) else "{:,.2f}"
+                df_work.loc[idx, col] = fmt.format(val)
+
+    # HTML Output with Charting Logic
+    table_html = df_work.to_html(classes='balance-sheet', border=0, escape=False)
+    
+    styled_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {{ font-family: -apple-system, system-ui, sans-serif; padding: 40px; background-color: #f0f2f5; }}
+        .container {{ background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+        h2 {{ color: #1a1a1a; border-bottom: 3px solid #4CAF50; padding-bottom: 15px; margin-bottom: 20px; }}
+        .balance-sheet {{ border-collapse: collapse; width: 100%; font-size: 13px; color: #333; }}
+        .balance-sheet thead th {{ background-color: #4CAF50; color: white; padding: 12px 10px; text-align: right; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }}
+        .balance-sheet tbody th {{ text-align: left !important; padding: 8px 15px; border: 1px solid #e0e0e0; border-right: 2px solid #ccc; white-space: nowrap; cursor: pointer; font-family: "SF Mono", monospace; background-color: #fff; }}
+        .balance-sheet tbody th:hover {{ background-color: #e8f5e9; color: #2e7d32; }}
+        .balance-sheet tbody td {{ border: 1px solid #e0e0e0; padding: 8px; text-align: right; }}
+        .balance-sheet tbody tr:nth-child(even) {{ background-color: #fafafa; }}
+        strong {{ font-weight: 800 !important; color: #000; }}
+        em {{ color: #777; font-size: 0.85em; }}
+        #chartModal {{ display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); }}
+        .modal-content {{ background: white; margin: 5% auto; padding: 20px; border-radius: 12px; width: 80%; max-width: 900px; }}
+        .close {{ color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }}
+    </style>
+</head>
+<body>
+    <div class="container"><h2>Balance Sheet (in {scale_label})</h2><div style="overflow-x: auto;">{table_html}</div></div>
+    <div id="chartModal"><div class="modal-content"><span class="close" onclick="closeModal()">&times;</span><canvas id="rowChart"></canvas></div></div>
+    <script>
+        let myChart = null;
+        document.querySelectorAll(".balance-sheet tbody th").forEach(header => {{
+            header.onclick = function() {{
+                const row = this.parentElement;
+                const label = this.innerText.trim();
+                const labels = Array.from(document.querySelectorAll(".balance-sheet thead th")).slice(1).map(th => th.innerText);
+                const data = Array.from(row.querySelectorAll("td")).map(td => parseFloat(td.innerText.replace(/,/g, '')));
+                document.getElementById("chartModal").style.display = "block";
+                if (myChart) myChart.destroy();
+                myChart = new Chart(document.getElementById('rowChart'), {{
+                    type: 'line', data: {{ labels, datasets: [{{ label, data, borderColor: '#4CAF50', backgroundColor: 'rgba(76,175,80,0.1)', fill: true, tension: 0.3 }}] }}
+                }});
+            }};
+        }});
+        function closeModal() {{ document.getElementById("chartModal").style.display = "none"; }}
+    </script>
+</body>
+</html>
+"""
+    with open(filename, 'w', encoding='utf-8') as f: f.write(styled_html)
+    webbrowser.open('file://' + os.path.abspath(filename))
+
+#----------------------------------------------------------------------------
 #MOD  011826 4:41 PM
 def fmp_baltsC(sym, facs=None, period='quarter', limit=400,
               qc_debt=True,
@@ -568,234 +772,7 @@ def fmp_baltsC(sym, facs=None, period='quarter', limit=400,
         print(f"Error in fmp_balts for {sym}: {e}")
         return pd.DataFrame()
 
-#--------------------------------------------------------------------
-##MOD 02/05/2026  7:19 AM
 
-def fmp_balFmt(df, add_ratios=False, add_asset_composition=False):
-    """
-    Format balance sheet data from fmp_balts() for human readability.
-    
-    Parameters:
-    -----------
-    df : DataFrame
-        Raw output from fmp_balts() with dates in rows, tags in columns
-    add_ratios : bool, default False
-        Add Current Ratio, Quick Ratio, and Debt-to-Equity at bottom
-    add_asset_composition : bool, default False
-        Add '% of Total Assets' row below each asset line item
-    
-    Returns:
-    --------
-    DataFrame with friendly names, scaled values, and optional ratios/percentages
-    Also prints title indicating scale (K/M/B)
-    
-    Example:
-    --------
-    >>> raw_df = fmp_balts('AAPL', period='quarter', limit=12)
-    >>> formatted = format_balance_sheet(raw_df, add_ratios=True, add_asset_composition=True)
-    """
-    
-    # Friendly name mapping for all standard FMP balance sheet tags
-    friendly_names = {
-        'date': 'Date',
-        'reportedCurrency': 'Currency',
-        'calendarYear': 'Year',
-        'period': 'Quarter',
-        'fillingDate': 'Filing Date',
-        'acceptedDate': 'Accepted Date',
-        'cashAndCashEquivalents': 'Cash & Equivalents',
-        'shortTermInvestments': 'Short-term Investments',
-        'netReceivables': 'Net Receivables',
-        'inventory': 'Inventory',
-        'otherCurrentAssets': 'Other Current Assets',
-        'totalCurrentAssets': 'Total Current Assets',
-        'propertyPlantEquipmentNet': 'PP&E (Net)',
-        'goodwill': 'Goodwill',
-        'intangibleAssets': 'Intangible Assets',
-        'longTermInvestments': 'Long-term Investments',
-        'taxAssets': 'Tax Assets',
-        'otherNonCurrentAssets': 'Other Non-Current Assets',
-        'totalNonCurrentAssets': 'Total Non-Current Assets',
-        'totalAssets': 'Total Assets',
-        'accountPayables': 'Accounts Payable',
-        'shortTermDebt': 'Short-term Debt',
-        'taxPayables': 'Tax Payables',
-        'deferredRevenue': 'Deferred Revenue',
-        'otherCurrentLiabilities': 'Other Current Liabilities',
-        'totalCurrentLiabilities': 'Total Current Liabilities',
-        'longTermDebt': 'Long-term Debt',
-        'capitalLeaseObligations': 'Capital Lease Obligations',
-        'deferredTaxLiabilitiesNonCurrent': 'Deferred Tax Liabilities',
-        'otherNonCurrentLiabilities': 'Other Non-Current Liabilities',
-        'totalNonCurrentLiabilities': 'Total Non-Current Liabilities',
-        'totalLiabilities': 'Total Liabilities',
-        'commonStock': 'Common Stock',
-        'retainedEarnings': 'Retained Earnings',
-        'accumulatedOtherComprehensiveIncomeLoss': 'Accumulated Other Comprehensive Income',
-        'totalStockholdersEquity': 'Shareholders\' Equity',
-        'totalLiabilitiesAndTotalEquity': 'Total Liabilities & Equity',
-        'totalInvestments': 'Total Investments',
-        'totalDebt': 'Total Debt',
-        'netDebt': 'Net Debt',
-        'equity_error_delta': 'Equity Error Delta'
-    }
-    
-    # Asset tags for composition percentages
-    asset_tags = [
-        'cashAndCashEquivalents',
-        'shortTermInvestments',
-        'netReceivables',
-        'inventory',
-        'otherCurrentAssets',
-        'totalCurrentAssets',
-        'propertyPlantEquipmentNet',
-        'goodwill',
-        'intangibleAssets',
-        'longTermInvestments',
-        'taxAssets',
-        'otherNonCurrentAssets',
-        'totalNonCurrentAssets'
-    ]
-    
-    # Make a copy and transpose (tags to index, dates to columns)
-    df_work = df.copy()
-    df_work = df_work.T
-    df_work = df_work.drop(['fillingDate', 'acceptedDate'], errors='ignore')
-    
-    # Get the Total Assets row to determine scaling
-    if 'totalAssets' not in df_work.index:
-        raise ValueError("totalAssets not found in data - cannot determine scale")
-    
-    # Use the first date column's Total Assets value for scaling decision
-    first_col = df_work.columns[0]
-    total_assets_value = df_work.loc['totalAssets', first_col]
-    
-    # Determine scale based on Total Assets
-    if total_assets_value < 1_000_000:
-        scale_factor = 1
-        scale_label = 'Units'
-    elif total_assets_value < 1_000_000_000:
-        scale_factor = 1_000
-        scale_label = 'Thousands'
-    else:
-        scale_factor = 1_000_000
-        scale_label = 'Millions'
-    
-    # Identify numeric rows (exclude date/period/currency type rows)
-    non_numeric_rows = ['date', 'reportedCurrency', 'calendarYear', 'period']
-    numeric_rows = [idx for idx in df_work.index if idx not in non_numeric_rows]
-    
-    # Scale numeric values
-    for col in df_work.columns:
-        for row in numeric_rows:
-            if pd.notna(df_work.loc[row, col]):
-                df_work.loc[row, col] = df_work.loc[row, col] / scale_factor
-    
-    # Apply friendly names to index
-    df_work.index = df_work.index.map(lambda x: friendly_names.get(x, x))
-    
-    # Add asset composition percentages if requested
-    if add_asset_composition:
-        rows_to_insert = []
-        
-        for tag in asset_tags:
-            if tag in df.columns:
-                friendly_tag = friendly_names.get(tag, tag)
-                # Find position of this tag in the formatted DataFrame
-                if friendly_tag in df_work.index:
-                    # Calculate percentage of Total Assets for each date column
-                    pct_row = pd.Series(index=df_work.columns, name='  % of Total Assets', dtype=float)
-                    
-                    for col in df_work.columns:
-                        # Get the actual unscaled values from original df
-                        col_idx = df.index[df.index.get_loc(col)]
-                        asset_val = df.loc[col_idx, tag]
-                        total_assets = df.loc[col_idx, 'totalAssets']
-                        
-                        if pd.notna(asset_val) and pd.notna(total_assets) and total_assets != 0:
-                            pct = (asset_val / total_assets) * 100
-                            pct_row[col] = pct
-                        else:
-                            pct_row[col] = np.nan
-                    
-                    rows_to_insert.append((friendly_tag, pct_row))
-        
-        # Insert percentage rows in reverse order to maintain position
-        for friendly_tag, pct_row in reversed(rows_to_insert):
-            idx_pos = df_work.index.get_loc(friendly_tag)
-            # Split the DataFrame and insert the percentage row
-            df_top = df_work.iloc[:idx_pos+1]
-            df_bottom = df_work.iloc[idx_pos+1:]
-            df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
-    
-    # Add ratios if requested
-    if add_ratios:
-        ratio_rows = []
-        
-        # Current Ratio = Current Assets / Current Liabilities
-        current_ratio = pd.Series(index=df_work.columns, name='Current Ratio', dtype=object)
-        for col in df_work.columns:
-            try:
-                col_idx = df.index[df.index.get_loc(col)]
-                ca = df.loc[col_idx, 'totalCurrentAssets']
-                cl = df.loc[col_idx, 'totalCurrentLiabilities']
-                if pd.notna(ca) and pd.notna(cl) and cl != 0:
-                    current_ratio[col] = f"{(ca / cl):.2f}"
-                else:
-                    current_ratio[col] = "N/A"
-            except:
-                current_ratio[col] = "N/A"
-        ratio_rows.append(current_ratio)
-        
-        # Quick Ratio = (Current Assets - Inventory) / Current Liabilities
-        quick_ratio = pd.Series(index=df_work.columns, name='Quick Ratio', dtype=object)
-        for col in df_work.columns:
-            try:
-                col_idx = df.index[df.index.get_loc(col)]
-                ca = df.loc[col_idx, 'totalCurrentAssets']
-                inv = df.loc[col_idx, 'inventory'] if 'inventory' in df.columns else 0
-                cl = df.loc[col_idx, 'totalCurrentLiabilities']
-                if pd.notna(ca) and pd.notna(cl) and cl != 0:
-                    inv_val = inv if pd.notna(inv) else 0
-                    quick_ratio[col] = f"{((ca - inv_val) / cl):.2f}"
-                else:
-                    quick_ratio[col] = "N/A"
-            except:
-                quick_ratio[col] = "N/A"
-        ratio_rows.append(quick_ratio)
-        
-        # Debt-to-Equity = Total Debt / Shareholders' Equity
-        dte_ratio = pd.Series(index=df_work.columns, name='Debt-to-Equity', dtype=object)
-        for col in df_work.columns:
-            try:
-                col_idx = df.index[df.index.get_loc(col)]
-                td = df.loc[col_idx, 'totalDebt']
-                se = df.loc[col_idx, 'totalStockholdersEquity']
-                if pd.notna(td) and pd.notna(se) and se != 0:
-                    dte_ratio[col] = f"{(td / se):.2f}"
-                else:
-                    dte_ratio[col] = "N/A"
-            except:
-                dte_ratio[col] = "N/A"
-        ratio_rows.append(dte_ratio)
-        
-        # Append ratio rows at the bottom
-        for ratio_row in ratio_rows:
-            df_work = pd.concat([df_work, pd.DataFrame([ratio_row])])
-    
-    # Format numeric values (except percentages and ratios)
-    for idx in df_work.index:
-        if '% of Total Assets' not in str(idx) and idx not in ['Current Ratio', 'Quick Ratio', 'Debt-to-Equity']:
-            for col in df_work.columns:
-                val = df_work.loc[idx, col]
-                if isinstance(val, (int, float)) and pd.notna(val):
-                    df_work.loc[idx, col] = f"{val:,.2f}"
-    
-    # Print title with scale
-    print(f"Balance Sheet (in {scale_label})")
-    print()
-    
-    return df_work
 #--------------------------------------------------------------------
 ## MOD  01/18/2026 7:00 AM
 
@@ -2024,7 +2001,7 @@ Output: top 40 holdings df of date of report, symbol, position size in shares
         'nameOfIssuer',	'titleOfClass','shares', 'px', 'value',	 'bps']].head(leng)
 		
 #--------------------------------------------------------------------------------------------
-def fmp_13Fcik(cik):
+def fmp_cikToEntity(cik):
     '''
 Input:  cik number as a string
 Output: Entity name as a string
