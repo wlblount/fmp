@@ -316,7 +316,9 @@ def fmp_balts(sym, facs=None, period='quarter', limit=400):
         # Combine the lists for final output
         final_cols = mandatory_cols + clean_facs
 
-        return df[final_cols]
+        result_df = df[final_cols]
+        result_df.attrs['symbol'] = sym
+        return result_df
 
     except Exception as e:
         print(f"Error in fmp_balts for {sym}: {e}")
@@ -899,16 +901,30 @@ def fmp_balarFmt(df, asset_tag='assets'):
     return df_work
 
 #-----------------------------------------------------------------------------
-# 2026-01-19 03:23:22
+# 2026-02-07 04:57:22
 def fmp_incts(sym, facs=None, period='quarter', limit=400):
     '''
     Retrieves standardized Income Statement data from the FMP v3 endpoint.
-    Includes Smart Correction (Validation Flag), Calculated EBITDA, and auto-pruning.
+    Displays FMP reported totals and validates against calculated component sums.
     
     Parameters:
     -----------
     sym : str
         The stock ticker symbol (e.g., 'AAPL').
+    
+    period : str, default='quarter'
+        The reporting period to retrieve:
+        - 'quarter' : Quarterly financial statements (default)
+        - 'annual'  : Annual financial statements (FY only)
+        - 'ttm'     : Trailing Twelve Months (rolling 4-quarter sum)
+    
+    limit : int, default=400
+        Maximum number of periods to retrieve from FMP.
+        - For 'quarter' and 'annual': Returns up to `limit` periods
+        - For 'ttm': Returns approximately `limit - 3` TTM periods
+          (Formula: ttm_periods = limit - 3, so limit = desired_ttm_periods + 3)
+          Examples: limit=8 → 5 TTM periods, limit=23 → 20 TTM periods
+    
     facs : list, optional
         List of specific line items to return. If None, returns the full standard set.
         
@@ -916,40 +932,124 @@ def fmp_incts(sym, facs=None, period='quarter', limit=400):
         ['reportedCurrency', 'calendarYear', 'period']
         
         AVAILABLE TAGS:
-        ['cik', 'fillingDate', 'acceptedDate', 'revenue', 'costOfRevenue', 'grossProfit',
-         'researchAndDevelopmentExpenses', 'generalAndAdministrativeExpenses',
-         'sellingAndMarketingExpenses', 
-         'otherExpenses', 'operatingExpenses', 'interestIncome', 
-         'interestExpense', 'depreciationAndAmortization', 'operatingIncome', 'ebitda',
-         'totalOtherIncomeExpensesNet', 'incomeBeforeTax', 'incomeTaxExpense', 
-         'netIncome', 'eps', 'epsdiluted', 'weightedAverageShsOut', 
-         'weightedAverageShsOutDil', 'link', 'finalLink']
+        Components:
+        ['revenue', 'costOfRevenue', 'researchAndDevelopmentExpenses', 
+         'generalAndAdministrativeExpenses', 'sellingAndMarketingExpenses', 
+         'otherExpenses', 'depreciationAndAmortization', 'interestIncome', 
+         'interestExpense', 'totalOtherIncomeExpensesNet', 'incomeTaxExpense',
+         'eps', 'epsdiluted', 'weightedAverageShsOut', 'weightedAverageShsOutDil']
+        
+        FMP Reported Totals (from 10-Q/10-K):
+        ['grossProfit', 'sga', 'operatingExpenses', 'operatingIncome', 'ebitda',
+         'incomeBeforeTax', 'netIncome']
+        
+        Validation Deltas (Reported - Calculated from Components):
+        ['grossProfit_delta_rpt_vs_calc', 'sga_delta_rpt_vs_calc', 'operatingExpenses_delta_rpt_vs_calc',
+         'operatingIncome_delta_rpt_vs_calc', 'ebitda_delta_rpt_vs_calc', 'netIncome_delta_rpt_vs_calc']
+        
+        Data Quality Flags:
+        ['duplicate_period'] - True if multiple filings exist for same calendarYear/period
+        
+        Metadata:
+        ['fillingDate', 'acceptedDate', 'link', 'finalLink', 'cik']
+    
+    Returns:
+    --------
+    pd.DataFrame
+        Income statement data with date index and symbol stored in df.attrs['symbol']
+    
+    LLM Context for Validation Columns:
+    ------------------------------------
+    This dataset includes validation columns (suffix: _delta_rpt_vs_calc) that verify 
+    financial statement internal consistency.
+    
+    Formula: Δ = FMP_reported_value - calculated_from_components
+    
+    Validation Columns & Their Formulas:
+    - grossProfit_delta_rpt_vs_calc = grossProfit(rpt) - (revenue - costOfRevenue)
+    - sga_delta_rpt_vs_calc = sga(rpt) - (generalAndAdministrativeExpenses + sellingAndMarketingExpenses)
+    - operatingExpenses_delta_rpt_vs_calc = operatingExpenses(rpt) - (researchAndDevelopmentExpenses + sga + otherExpenses)
+    - operatingIncome_delta_rpt_vs_calc = operatingIncome(rpt) - (grossProfit - operatingExpenses)
+    - ebitda_delta_rpt_vs_calc = ebitda(rpt) - (operatingIncome + depreciationAndAmortization)
+    - netIncome_delta_rpt_vs_calc = netIncome(rpt) - (incomeBeforeTax - incomeTaxExpense)
+    
+    Interpreting Validation Deltas:
+    Δ = 0        → Components reconcile perfectly with reported total ✓
+    Δ > 0        → Reported total exceeds component sum
+                   CAUSE: Component breakdown not disclosed in filing
+                   EXAMPLE: Company reports SG&A as single line without G&A/S&M split
+    Δ < 0        → Component sum exceeds reported total
+                   CAUSE: Potential data quality issue or parsing error 🚩
+    Small Δ      → Rounding differences (typically <0.1% of revenue)
+    
+    Common Patterns:
+    1. sga_delta_rpt_vs_calc = sga amount, with G&A=0 and S&M=0
+       → Company doesn't break out SG&A components (normal for many companies)
+    
+    2. operatingExpenses_delta_rpt_vs_calc = same as sga_delta_rpt_vs_calc
+       → OpEx delta inherits the SG&A breakdown issue
+    
+    3. All deltas = 0 except small ebitda_delta_rpt_vs_calc
+       → Likely D&A timing differences or rounding
+    
+    4. Unexpected large delta (>1% of line item)
+       → Flag for manual review of source filing
+    
+    When asked to verify data quality:
+    1. Check if delta = 0 (perfect reconciliation)
+    2. If delta > 0, check if components exist (look for zeros)
+    3. If components are zero, delta indicates missing breakdown (expected)
+    4. If components exist but don't sum, flag as data quality issue
+    5. Calculate delta as % of reported value to assess materiality
+    
+    Data Quality Flag - duplicate_period:
+    - False: Single filing for this period (normal)
+    - True: Multiple filings exist for same calendarYear/period combination
+           CAUSES: Amended filings, restatements, or FMP data quality issues
+           ACTION: Review fillingDate to identify most recent filing, or 
+                   manually verify which filing to use
+    
+    TTM Period Notes:
+    - Financial line items are summed over rolling 4 quarters
+    - EPS metrics are calculated as: TTM Net Income / Average TTM Diluted Shares
+    - Share counts are averaged (not summed) over the 4-quarter period
+    - duplicate_period flag not applicable (TTM aggregates across periods)
+        
+    Examples:
+    ---------
+    >>> # Get last 8 quarters
+    >>> df = fmp_incts('AAPL', period='quarter', limit=8)
+    
+    >>> # Get last 5 years annual
+    >>> df = fmp_incts('AAPL', period='annual', limit=5)
+    
+    >>> # Get last 20 TTM periods
+    >>> df = fmp_incts('AAPL', period='ttm', limit=23)
+    
+    >>> # Get specific fields only
+    >>> df = fmp_incts('AAPL', facs=['revenue', 'netIncome', 'eps'])
+    
+    >>> # Check for duplicate filings
+    >>> df = fmp_incts('AZTA', period='quarter', limit=8)
+    >>> if df['duplicate_period'].any():
+    >>>     print("Warning: Multiple filings detected")
+    >>>     print(df[df['duplicate_period']][['calendarYear', 'period', 'fillingDate']])
     '''
-    # 1. Define the internal list of available financial tags (Added 'ebitda')
-    available_tags = [
-        'fillingDate', 'acceptedDate', 'revenue', 'costOfRevenue', 'grossProfit',
-        'researchAndDevelopmentExpenses', 'generalAndAdministrativeExpenses',
-        'sellingAndMarketingExpenses', 
-        'otherExpenses', 'operatingExpenses',  
-        'depreciationAndAmortization', 'operatingIncome', 'ebitda', 
-        'totalOtherIncomeExpensesNet', 'interestIncome', 'interestExpense', 
-        'incomeBeforeTax', 'incomeTaxExpense', 'netIncome', 'eps', 'epsdiluted', 
-        'weightedAverageShsOut', 'weightedAverageShsOutDil','op_income_error_delta'
-    ]
-
+    
     sym = sym.upper().strip()
     fetch_period = 'quarter' if period.lower() == 'ttm' else period
+    
+    # URL construction
     url = f'https://financialmodelingprep.com/api/v3/income-statement/{sym}?period={fetch_period}&limit={limit}&apikey={apikey}'
-    url = requote_uri(url)
 
     try:
         response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
-        if not stuff or not isinstance(stuff, list): return pd.DataFrame()
+        if not stuff or not isinstance(stuff, list): 
+            return pd.DataFrame()
 
         df = pd.DataFrame(stuff)
         
-        # Ensure date is the index
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
@@ -957,51 +1057,116 @@ def fmp_incts(sym, facs=None, period='quarter', limit=400):
         
         df = df.sort_index()
 
-        # Logic: Drop columns that are 100% NaN
+        if 'sellingGeneralAndAdministrativeExpenses' in df.columns:
+            df = df.rename(columns={'sellingGeneralAndAdministrativeExpenses': 'sga'})
+
         df = df.dropna(axis=1, how='all')
 
-        # --- NEW: Calculate EBITDA ---
-        # EBITDA = Operating Income + Depreciation & Amortization
-        if 'operatingIncome' in df.columns and 'depreciationAndAmortization' in df.columns:
-            df['ebitda'] = df['operatingIncome'].fillna(0) + df['depreciationAndAmortization'].fillna(0)
+        # Flag duplicate periods (for quarter and annual only, not TTM)
+        if period.lower() in ['quarter', 'annual']:
+            df['duplicate_period'] = df.duplicated(subset=['calendarYear', 'period'], keep=False)
 
-        # Smart Correction (Validation Flag)
-        if all(col in df.columns for col in ['grossProfit', 'operatingExpenses', 'operatingIncome']):
-            df['op_income_error_delta'] = (df['grossProfit'].fillna(0) - 
-                                           df['operatingExpenses'].fillna(0) - 
-                                           df['operatingIncome'].fillna(0))
-
-        # Define Mandatory Columns (always shown first)
-        mandatory_cols = ['reportedCurrency', 'calendarYear', 'period']
-        
-        # If facs is None, use the full available tag list
-        if facs is None:
-            facs = available_tags
-            
-        # Clean the facs list to ensure they exist and don't duplicate mandatory cols
-        clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date', 'symbol'])]
-
-        # Handle TTM / Annual logic
+        # TTM period calculations
         if period.lower() == 'ttm':
             df = df.reset_index()
-            df = df.drop_duplicates(subset=['calendarYear', 'period'], keep='last')
             window_size = df['period'].nunique() if df['period'].nunique() in [2, 4] else 4
             
             numeric_cols = df.select_dtypes(include=['number']).columns
-            # Ensure we only sum appropriate line items (avoid years/eps/shares)
-            cols_to_sum = [c for c in numeric_cols if c in clean_facs and 'eps' not in c.lower() and 'Year' not in c]
+            cols_to_sum = [c for c in numeric_cols if 'eps' not in c.lower() and 'Year' not in c and 'shs' not in c.lower()]
+
+                        # FIRST: Average share counts on original data
+            if 'weightedAverageShsOutDil' in df.columns:
+                df['weightedAverageShsOutDil'] = df['weightedAverageShsOutDil'].rolling(window=window_size).mean()
             
-            df_ttm = df.copy()
-            df_ttm[cols_to_sum] = df[cols_to_sum].rolling(window=window_size).sum()
-            df = df_ttm.dropna(subset=[cols_to_sum[0]]).set_index('date')
+            if 'weightedAverageShsOut' in df.columns:
+                df['weightedAverageShsOut'] = df['weightedAverageShsOut'].rolling(window=window_size).mean()
+            
+            # THEN: Sum financial statement line items
+            df[cols_to_sum] = df[cols_to_sum].rolling(window=window_size).sum()
+            
+            # Drop incomplete rolling windows
+            df = df.dropna(subset=[cols_to_sum[0]]).set_index('date')
+            
+            # Calculate TTM EPS after dropna (when we have valid TTM periods)
+            if 'netIncome' in df.columns and 'weightedAverageShsOutDil' in df.columns:
+                df['epsdiluted'] = df['netIncome'] / df['weightedAverageShsOutDil']
+            
+            if 'netIncome' in df.columns and 'weightedAverageShsOut' in df.columns:
+                df['eps'] = df['netIncome'] / df['weightedAverageShsOut']
 
         elif period.lower() == 'annual':
             df = df[df['period'] == 'FY']
 
-        # Combine the lists for final output
-        final_cols = mandatory_cols + [f for f in clean_facs if f in df.columns]
+        # Calculate internal validation values
+        df['grossProfit_internal'] = df['revenue'].fillna(0) - df['costOfRevenue'].fillna(0)
+        
+        df['sga_internal'] = (df['generalAndAdministrativeExpenses'].fillna(0) + 
+                              df['sellingAndMarketingExpenses'].fillna(0))
+        
+        df['operatingExpenses_internal'] = (df['researchAndDevelopmentExpenses'].fillna(0) + 
+                                            df['sga_internal'].fillna(0) + 
+                                            df['otherExpenses'].fillna(0))
+        
+        df['operatingIncome_internal'] = df['grossProfit'].fillna(0) - df['operatingExpenses'].fillna(0)
+        
+        df['ebitda_internal'] = df['operatingIncome'].fillna(0) + df['depreciationAndAmortization'].fillna(0)
+        
+        df['netIncome_internal'] = df['incomeBeforeTax'].fillna(0) - df['incomeTaxExpense'].fillna(0)
+        
+        # Calculate validation deltas using loop
+        delta_mappings = {
+            'grossProfit': 'grossProfit_internal',
+            'sga': 'sga_internal',
+            'operatingExpenses': 'operatingExpenses_internal',
+            'operatingIncome': 'operatingIncome_internal',
+            'ebitda': 'ebitda_internal',
+            'netIncome': 'netIncome_internal'
+        }
+        
+        for reported_col, calc_col in delta_mappings.items():
+            delta_col = f'{reported_col}_delta_rpt_vs_calc'
+            df[delta_col] = df[reported_col].fillna(0) - df[calc_col].fillna(0)
 
-        return df[final_cols]
+        # Drop temporary internal calculation columns
+        calc_cols = [col for col in df.columns if col.endswith('_internal')]
+        df = df.drop(columns=calc_cols)
+
+        # Define standard column order
+        standard_order = [
+            'reportedCurrency', 'calendarYear', 'period', 'duplicate_period',
+            'revenue', 'costOfRevenue', 'grossProfit',
+            'researchAndDevelopmentExpenses', 'generalAndAdministrativeExpenses',
+            'sellingAndMarketingExpenses', 'sga', 'otherExpenses', 'operatingExpenses',
+            'depreciationAndAmortization', 'operatingIncome', 'ebitda',
+            'totalOtherIncomeExpensesNet', 'interestIncome', 'interestExpense',
+            'incomeBeforeTax', 'incomeTaxExpense', 'netIncome',
+            'eps', 'epsdiluted', 'weightedAverageShsOut', 'weightedAverageShsOutDil',
+            'grossProfit_delta_rpt_vs_calc', 'sga_delta_rpt_vs_calc', 'operatingExpenses_delta_rpt_vs_calc',
+            'operatingIncome_delta_rpt_vs_calc', 'ebitda_delta_rpt_vs_calc', 'netIncome_delta_rpt_vs_calc',
+            'fillingDate'
+        ]
+
+        mandatory_cols = ['reportedCurrency', 'calendarYear', 'period']
+        
+        # Build final column list
+        if facs is None:
+            final_cols = mandatory_cols.copy()
+            for col in standard_order:
+                if col in df.columns and col not in final_cols:
+                    final_cols.append(col)
+        else:
+            clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date', 'symbol'])]
+            final_cols = mandatory_cols.copy()
+            for col in standard_order:
+                if col in clean_facs and col not in final_cols:
+                    final_cols.append(col)
+            for col in clean_facs:
+                if col not in final_cols:
+                    final_cols.append(col)
+
+        result_df = df[final_cols]
+        result_df.attrs['symbol'] = sym
+        return result_df
 
     except Exception as e:
         print(f"Error in fmp_incts for {sym}: {e}")
