@@ -212,79 +212,207 @@ outputs: dataframe of marketcap values with a datetime index
     return dff.mktCap
 
 #-----------------------------------------------------
-# 2026-01-18 09:10am
+# 2026-02-08 08:20am
 
-def fmp_balts(sym, facs=None, period='quarter', limit=400):
+def fmp_balts(sym, facs=None, period='quarter', limit=8, save_md=None):
     '''
     Retrieves standardized Balance Sheet data from the FMP v3 endpoint.
-    Includes Smart Correction (Validation Flag) and auto-pruning of empty columns.
+    Displays FMP reported totals and validates against calculated component sums.
     
     Parameters:
     -----------
     sym : str
         The stock ticker symbol (e.g., 'AAPL').
+    
+    period : str, default='quarter'
+        The reporting period to retrieve:
+        - 'quarter' : Quarterly financial statements (default)
+        - 'annual'  : Annual financial statements (FY only)
+    
+    limit : int, default=400
+        Maximum number of periods to retrieve from FMP.
+    
     facs : list, optional
         List of specific line items to return. If None, returns the full standard set.
         
         Mandatory Columns (Always Returned):
         ['reportedCurrency', 'calendarYear', 'period']
         
-        available_tags = 
-        # Assets
-        'cashAndCashEquivalents', 'shortTermInvestments', 'netReceivables', 
-        'inventory', 'otherCurrentAssets', 'totalCurrentAssets',
-        'propertyPlantEquipmentNet', 'goodwill', 'intangibleAssets', 
-        'longTermInvestments', 'taxAssets', 'otherNonCurrentAssets', 'totalNonCurrentAssets',
-        'totalAssets',
+        AVAILABLE TAGS:
+        Current Assets:
+        ['cashAndCashEquivalents', 'shortTermInvestments', 'netReceivables', 
+         'inventory', 'otherCurrentAssets']
+        
+        Non-Current Assets:
+        ['propertyPlantEquipmentNet', 'goodwill', 'intangibleAssets', 
+         'longTermInvestments', 'taxAssets', 'otherNonCurrentAssets']
+        
+        Current Liabilities:
+        ['accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue', 
+         'otherCurrentLiabilities']
+        
+        Non-Current Liabilities:
+        ['longTermDebt', 'deferredRevenueNonCurrent', 'deferredTaxLiabilitiesNonCurrent',
+         'otherNonCurrentLiabilities', 'capitalLeaseObligations']
+        
+        Stockholders Equity:
+        ['preferredStock', 'commonStock', 'retainedEarnings', 
+         'accumulatedOtherComprehensiveIncomeLoss', 'othertotalStockholdersEquity',
+         'minorityInterest']
+        
+        FMP Reported Totals (from 10-Q/10-K):
+        ['totalCurrentAssets', 'totalNonCurrentAssets', 'totalAssets',
+         'totalCurrentLiabilities', 'totalNonCurrentLiabilities', 'totalLiabilities',
+         'totalStockholdersEquity', 'totalLiabilitiesAndStockholdersEquity']
+        
+        Validation Deltas (Reported - Calculated from Components):
+        ['totalCurrentAssets_delta_rpt_vs_calc', 'totalNonCurrentAssets_delta_rpt_vs_calc',
+         'totalAssets_delta_rpt_vs_calc', 'totalCurrentLiabilities_delta_rpt_vs_calc',
+         'totalNonCurrentLiabilities_delta_rpt_vs_calc', 'totalLiabilities_delta_rpt_vs_calc',
+         'totalStockholdersEquity_delta_rpt_vs_calc', 'totalLiabilitiesAndStockholdersEquity_delta_rpt_vs_calc',
+         'accounting_equation_delta']
+        
+        Data Quality Flags:
+        ['duplicate_period'] - True if multiple filings exist for same calendarYear/period
+        
+        Metadata:
+        ['fillingDate']
     
-        # Liabilities
-        'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue', 
-        'otherCurrentLiabilities', 'totalCurrentLiabilities',
-        'longTermDebt', 'capitalLeaseObligations', 'deferredTaxLiabilitiesNonCurrent', 
-        'otherNonCurrentLiabilities', 'totalNonCurrentLiabilities',
-        'totalLiabilities',
+    save_md : str, optional
+        Filepath to save DataFrame with metadata as markdown file.
+        If provided, saves output with company metadata header.
+        Example: save_md='apple_balance_sheet.md'
     
-        # Equity
-        'commonStock', 'retainedEarnings', 'accumulatedOtherComprehensiveIncomeLoss',
-        'totalStockholdersEquity', 'totalLiabilitiesAndTotalEquity',
+    Returns:
+    --------
+    pd.DataFrame
+        Balance sheet data with date index and symbol stored in df.attrs['symbol']
+        Company metadata stored in df.attrs['metadata'] containing:
+        ['companyName', 'cik', 'isin', 'cusip', 'currency', 'exchangeShortName',
+         'industry', 'sector', 'country']
     
-        # Analytical Metrics (Memo items)
-        'totalInvestments', 'totalDebt', 'netDebt', 'equity_error_delta'
+    LLM Context for Validation Columns:
+    ------------------------------------
+    This dataset includes validation columns (suffix: _delta_rpt_vs_calc) that verify 
+    balance sheet internal consistency.
     
+    Formula: Δ = FMP_reported_value - calculated_from_components
+    
+    Validation Columns & Their Formulas:
+    - totalCurrentAssets_delta_rpt_vs_calc = totalCurrentAssets(rpt) - 
+        (cashAndCashEquivalents + shortTermInvestments + netReceivables + inventory + otherCurrentAssets)
+    - totalNonCurrentAssets_delta_rpt_vs_calc = totalNonCurrentAssets(rpt) - 
+        (propertyPlantEquipmentNet + goodwill + intangibleAssets + longTermInvestments + taxAssets + otherNonCurrentAssets)
+    - totalAssets_delta_rpt_vs_calc = totalAssets(rpt) - (totalCurrentAssets + totalNonCurrentAssets)
+    - totalCurrentLiabilities_delta_rpt_vs_calc = totalCurrentLiabilities(rpt) - 
+        (accountPayables + shortTermDebt + taxPayables + deferredRevenue + otherCurrentLiabilities)
+    - totalNonCurrentLiabilities_delta_rpt_vs_calc = totalNonCurrentLiabilities(rpt) - 
+        (longTermDebt + deferredRevenueNonCurrent + deferredTaxLiabilitiesNonCurrent + otherNonCurrentLiabilities + capitalLeaseObligations)
+    - totalLiabilities_delta_rpt_vs_calc = totalLiabilities(rpt) - (totalCurrentLiabilities + totalNonCurrentLiabilities)
+    - totalStockholdersEquity_delta_rpt_vs_calc = totalStockholdersEquity(rpt) - 
+        (preferredStock + commonStock + retainedEarnings + accumulatedOtherComprehensiveIncomeLoss + othertotalStockholdersEquity + minorityInterest)
+    - totalLiabilitiesAndStockholdersEquity_delta_rpt_vs_calc = totalLiabilitiesAndStockholdersEquity(rpt) - 
+        (totalLiabilities + totalStockholdersEquity)
+    - accounting_equation_delta = totalAssets - totalLiabilitiesAndStockholdersEquity
+        (Fundamental accounting equation check: Assets = Liabilities + Equity)
+    
+    Interpreting Validation Deltas:
+    Δ = 0        → Components reconcile perfectly with reported total ✓
+    Δ > 0        → Reported total exceeds component sum
+                   CAUSE: Component breakdown not disclosed in filing
+                   EXAMPLE: Company reports "Other Current Assets" as single line without detail
+    Δ < 0        → Component sum exceeds reported total
+                   CAUSE: Potential data quality issue or parsing error 🚩
+    Small Δ      → Rounding differences (typically <0.1% of total)
+    
+    Special Note on accounting_equation_delta:
+    This should ALWAYS equal zero in valid financial statements.
+    Non-zero values indicate serious data quality issues requiring manual review.
+    
+    Common Patterns:
+    1. totalCurrentAssets_delta_rpt_vs_calc > 0 with otherCurrentAssets = 0
+       → Company doesn't break out all current asset components (normal)
+    
+    2. totalStockholdersEquity_delta_rpt_vs_calc > 0 with many equity components = 0
+       → Company uses simplified equity structure (common for many firms)
+    
+    3. accounting_equation_delta ≠ 0
+       → Flag for immediate manual review 🚩
+    
+    When asked to verify data quality:
+    1. Check accounting_equation_delta first (must be 0)
+    2. For other deltas, check if delta = 0 (perfect reconciliation)
+    3. If delta > 0, check if components exist (look for zeros)
+    4. If components are zero, delta indicates missing breakdown (expected)
+    5. If components exist but don't sum, flag as data quality issue
+    6. Calculate delta as % of reported value to assess materiality
+    
+    Data Quality Flag - duplicate_period:
+    - False: Single filing for this period (normal)
+    - True: Multiple filings exist for same calendarYear/period combination
+           CAUSES: Amended filings, restatements, or FMP data quality issues
+           ACTION: Review fillingDate to identify most recent filing, or 
+                   manually verify which filing to use
+    
+    Examples:
+    ---------
+    >>> # Get last 8 quarters
+    >>> df = fmp_balts('AAPL', period='quarter', limit=8)
+    
+    >>> # Get last 5 years annual
+    >>> df = fmp_balts('AAPL', period='annual', limit=5)
+    
+    >>> # Get specific fields only
+    >>> df = fmp_balts('AAPL', facs=['totalAssets', 'totalLiabilities', 'totalStockholdersEquity'])
+    
+    >>> # Check for duplicate filings
+    >>> df = fmp_balts('AZTA', period='quarter', limit=8)
+    >>> if df['duplicate_period'].any():
+    >>>     print("Warning: Multiple filings detected")
+    >>>     print(df[df['duplicate_period']][['calendarYear', 'period', 'fillingDate']])
+    
+    >>> # Verify accounting equation
+    >>> df = fmp_balts('AAPL')
+    >>> if df['accounting_equation_delta'].abs().max() > 0:
+    >>>     print("WARNING: Accounting equation doesn't balance!")
+    
+    >>> # Access company metadata
+    >>> df = fmp_balts('AZTA')
+    >>> print(df.attrs['metadata'])
+    
+    >>> # Save with metadata to markdown
+    >>> df = fmp_balts('AZTA', save_md='azenta_balance_sheet.md')
     '''
-    # 1. Define the internal list of available financial tags
-    available_tags = [
-        'fillingDate', 'acceptedDate', 
-        # Assets
-        'cashAndCashEquivalents', 'shortTermInvestments', 'netReceivables', 
-        'inventory', 'otherCurrentAssets', 'totalCurrentAssets',
-        'propertyPlantEquipmentNet', 'goodwill', 'intangibleAssets', 
-        'longTermInvestments', 'taxAssets', 'otherNonCurrentAssets', 'totalNonCurrentAssets',
-        'totalAssets',
-        
-        # Liabilities
-        'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue', 
-        'otherCurrentLiabilities', 'totalCurrentLiabilities',
-        'longTermDebt', 'capitalLeaseObligations', 'deferredTaxLiabilitiesNonCurrent', 
-        'otherNonCurrentLiabilities', 'totalNonCurrentLiabilities',
-        'totalLiabilities',
-        
-        # Equity
-        'commonStock', 'retainedEarnings', 'accumulatedOtherComprehensiveIncomeLoss',
-        'totalStockholdersEquity', 'totalLiabilitiesAndTotalEquity',
-        
-        # Analytical Metrics (Memo items)
-        'totalInvestments', 'totalDebt', 'netDebt','equity_error_delta'
-    ]
-
+    
     sym = sym.upper().strip()
-    url = f"https://financialmodelingprep.com/api/v3/balance-sheet-statement/{sym}?period={period}&limit={limit}&apikey={apikey}"
+    
+    # Fetch company profile metadata
+    try:
+        profile = fmp_profF(sym)
+        metadata = {
+            'companyName': profile.get('companyName'),
+            'cik': profile.get('cik'),
+            'isin': profile.get('isin'),
+            'cusip': profile.get('cusip'),
+            'currency': profile.get('currency'),
+            'exchangeShortName': profile.get('exchangeShortName'),
+            'industry': profile.get('industry'),
+            'sector': profile.get('sector'),
+            'country': profile.get('country')
+        }
+    except Exception as e:
+        print(f"Warning: Could not fetch metadata for {sym}: {e}")
+        metadata = {}
+    
+    # URL construction
+    url = f'https://financialmodelingprep.com/api/v3/balance-sheet-statement/{sym}?period={period}&limit={limit}&apikey={apikey}'
     url = requote_uri(url)
 
     try:
         response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
-        if not stuff or not isinstance(stuff, list): return pd.DataFrame()
+        if not stuff or not isinstance(stuff, list):
+            return pd.DataFrame()
 
         df = pd.DataFrame(stuff)
         
@@ -294,30 +422,173 @@ def fmp_balts(sym, facs=None, period='quarter', limit=400):
             df.index.name = 'date'
         
         df = df.sort_index()
-
-        # Logic: Drop columns that are 100% NaN (unused tags)
+        
+        # Drop columns that are 100% NaN
         df = df.dropna(axis=1, how='all')
-
-        # Smart Correction (Validation Flag)
-        df['equity_error_delta'] = (df['totalAssets'].fillna(0) - 
-                                   (df['totalLiabilities'].fillna(0) + 
-                                    df['totalStockholdersEquity'].fillna(0)))
-
-        # Define Mandatory Columns (always shown first)
+        
+        # Flag duplicate periods
+        df['duplicate_period'] = df.duplicated(subset=['calendarYear', 'period'], keep=False)
+        
+        # Filter to FY only for annual period
+        if period.lower() == 'annual':
+            df = df[df['period'] == 'FY']
+        
+        # Calculate internal validation values
+        # Current Assets
+        df['totalCurrentAssets_internal'] = (
+            df['cashAndCashEquivalents'].fillna(0) +
+            df['shortTermInvestments'].fillna(0) +
+            df['netReceivables'].fillna(0) +
+            df['inventory'].fillna(0) +
+            df['otherCurrentAssets'].fillna(0)
+        )
+        
+        # Non-Current Assets
+        df['totalNonCurrentAssets_internal'] = (
+            df['propertyPlantEquipmentNet'].fillna(0) +
+            df['goodwill'].fillna(0) +
+            df['intangibleAssets'].fillna(0) +
+            df['longTermInvestments'].fillna(0) +
+            df['taxAssets'].fillna(0) +
+            df['otherNonCurrentAssets'].fillna(0)
+        )
+        
+        # Total Assets
+        df['totalAssets_internal'] = (
+            df['totalCurrentAssets'].fillna(0) +
+            df['totalNonCurrentAssets'].fillna(0)
+        )
+        
+        # Current Liabilities
+        df['totalCurrentLiabilities_internal'] = (
+            df['accountPayables'].fillna(0) +
+            df['shortTermDebt'].fillna(0) +
+            df['taxPayables'].fillna(0) +
+            df['deferredRevenue'].fillna(0) +
+            df['otherCurrentLiabilities'].fillna(0)
+        )
+        
+        # Non-Current Liabilities
+        df['totalNonCurrentLiabilities_internal'] = (
+            df['longTermDebt'].fillna(0) +
+            df['deferredRevenueNonCurrent'].fillna(0) +
+            df['deferredTaxLiabilitiesNonCurrent'].fillna(0) +
+            df['otherNonCurrentLiabilities'].fillna(0) +
+            df['capitalLeaseObligations'].fillna(0)
+        )
+        
+        # Total Liabilities
+        df['totalLiabilities_internal'] = (
+            df['totalCurrentLiabilities'].fillna(0) +
+            df['totalNonCurrentLiabilities'].fillna(0)
+        )
+        
+        # Stockholders Equity
+        df['totalStockholdersEquity_internal'] = (
+            df['preferredStock'].fillna(0) +
+            df['commonStock'].fillna(0) +
+            df['retainedEarnings'].fillna(0) +
+            df['accumulatedOtherComprehensiveIncomeLoss'].fillna(0) +
+            df['othertotalStockholdersEquity'].fillna(0) +
+            df['minorityInterest'].fillna(0)
+        )
+        
+        # Total Liabilities and Stockholders Equity
+        df['totalLiabilitiesAndStockholdersEquity_internal'] = (
+            df['totalLiabilities'].fillna(0) +
+            df['totalStockholdersEquity'].fillna(0)
+        )
+        
+        # Calculate validation deltas
+        delta_mappings = {
+            'totalCurrentAssets': 'totalCurrentAssets_internal',
+            'totalNonCurrentAssets': 'totalNonCurrentAssets_internal',
+            'totalAssets': 'totalAssets_internal',
+            'totalCurrentLiabilities': 'totalCurrentLiabilities_internal',
+            'totalNonCurrentLiabilities': 'totalNonCurrentLiabilities_internal',
+            'totalLiabilities': 'totalLiabilities_internal',
+            'totalStockholdersEquity': 'totalStockholdersEquity_internal',
+            'totalLiabilitiesAndStockholdersEquity': 'totalLiabilitiesAndStockholdersEquity_internal'
+        }
+        
+        for reported_col, calc_col in delta_mappings.items():
+            delta_col = f'{reported_col}_delta_rpt_vs_calc'
+            df[delta_col] = df[reported_col].fillna(0) - df[calc_col].fillna(0)
+        
+        # Accounting equation check (Assets = Liabilities + Equity)
+        df['accounting_equation_delta'] = (
+            df['totalAssets'].fillna(0) - 
+            df['totalLiabilitiesAndStockholdersEquity'].fillna(0)
+        )
+        
+        # Drop temporary internal calculation columns
+        calc_cols = [col for col in df.columns if col.endswith('_internal')]
+        df = df.drop(columns=calc_cols)
+        
+        # Define standard column order
+        standard_order = [
+            'reportedCurrency', 'calendarYear', 'period', 'duplicate_period',
+            # Current Assets
+            'cashAndCashEquivalents', 'shortTermInvestments', 'netReceivables',
+            'inventory', 'otherCurrentAssets', 'totalCurrentAssets',
+            # Non-Current Assets
+            'propertyPlantEquipmentNet', 'goodwill', 'intangibleAssets',
+            'longTermInvestments', 'taxAssets', 'otherNonCurrentAssets', 'totalNonCurrentAssets',
+            # Total Assets
+            'totalAssets',
+            # Current Liabilities
+            'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue',
+            'otherCurrentLiabilities', 'totalCurrentLiabilities',
+            # Non-Current Liabilities
+            'longTermDebt', 'deferredRevenueNonCurrent', 'deferredTaxLiabilitiesNonCurrent',
+            'otherNonCurrentLiabilities', 'capitalLeaseObligations', 'totalNonCurrentLiabilities',
+            # Total Liabilities
+            'totalLiabilities',
+            # Stockholders Equity
+            'preferredStock', 'commonStock', 'retainedEarnings',
+            'accumulatedOtherComprehensiveIncomeLoss', 'othertotalStockholdersEquity',
+            'minorityInterest', 'totalStockholdersEquity',
+            # Total L&E
+            'totalLiabilitiesAndStockholdersEquity',
+            # Validation Deltas
+            'totalCurrentAssets_delta_rpt_vs_calc', 'totalNonCurrentAssets_delta_rpt_vs_calc',
+            'totalAssets_delta_rpt_vs_calc',
+            'totalCurrentLiabilities_delta_rpt_vs_calc', 'totalNonCurrentLiabilities_delta_rpt_vs_calc',
+            'totalLiabilities_delta_rpt_vs_calc',
+            'totalStockholdersEquity_delta_rpt_vs_calc',
+            'totalLiabilitiesAndStockholdersEquity_delta_rpt_vs_calc',
+            'accounting_equation_delta',
+            # Metadata
+            'fillingDate'
+        ]
+        
         mandatory_cols = ['reportedCurrency', 'calendarYear', 'period']
         
-        # If facs is None, use the full available tag list
+        # Build final column list
         if facs is None:
-            facs = available_tags
-            
-        # Clean the facs list to ensure they exist in the DF and don't duplicate mandatory cols
-        clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date', 'symbol'])]
+            final_cols = mandatory_cols.copy()
+            for col in standard_order:
+                if col in df.columns and col not in final_cols:
+                    final_cols.append(col)
+        else:
+            clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date', 'symbol'])]
+            final_cols = mandatory_cols.copy()
+            for col in standard_order:
+                if col in clean_facs and col not in final_cols:
+                    final_cols.append(col)
+            for col in clean_facs:
+                if col not in final_cols:
+                    final_cols.append(col)
         
-        # Combine the lists for final output
-        final_cols = mandatory_cols + clean_facs
-
         result_df = df[final_cols]
         result_df.attrs['symbol'] = sym
+        result_df.attrs['metadata'] = metadata
+        result_df.attrs['period'] = period.lower()
+        
+        # Save to markdown if requested
+        if save_md:
+            df_to_markdown_with_metadata(result_df, save_md)
+        
         return result_df
 
     except Exception as e:
@@ -902,7 +1173,7 @@ def fmp_balarFmt(df, asset_tag='assets'):
 
 #-----------------------------------------------------------------------------
 # 2026-02-07 04:57:22
-def fmp_incts(sym, facs=None, period='quarter', limit=400):
+def fmp_incts(sym, period='quarter', limit=8, facs=None, save_md=None):
     '''
     Retrieves standardized Income Statement data from the FMP v3 endpoint.
     Displays FMP reported totals and validates against calculated component sums.
@@ -953,10 +1224,18 @@ def fmp_incts(sym, facs=None, period='quarter', limit=400):
         Metadata:
         ['fillingDate', 'acceptedDate', 'link', 'finalLink', 'cik']
     
+    save_md : str, optional
+        Filepath to save DataFrame with metadata as markdown file.
+        If provided, saves output with company metadata header.
+        Example: save_md='azenta_financials.md'
+    
     Returns:
     --------
     pd.DataFrame
         Income statement data with date index and symbol stored in df.attrs['symbol']
+        Company metadata stored in df.attrs['metadata'] containing:
+        ['companyName', 'cik', 'isin', 'cusip', 'currency', 'exchangeShortName',
+         'industry', 'sector', 'country']
     
     LLM Context for Validation Columns:
     ------------------------------------
@@ -1014,6 +1293,12 @@ def fmp_incts(sym, facs=None, period='quarter', limit=400):
     - EPS metrics are calculated as: TTM Net Income / Average TTM Diluted Shares
     - Share counts are averaged (not summed) over the 4-quarter period
     - duplicate_period flag not applicable (TTM aggregates across periods)
+    
+    Metadata Notes:
+    - Company metadata is fetched via fmp_profF() and attached to df.attrs['metadata']
+    - Metadata persists in Python session but not in all file formats
+    - Use save_md parameter to export with metadata preserved in markdown format
+    - Access metadata: df.attrs['metadata']
         
     Examples:
     ---------
@@ -1034,9 +1319,35 @@ def fmp_incts(sym, facs=None, period='quarter', limit=400):
     >>> if df['duplicate_period'].any():
     >>>     print("Warning: Multiple filings detected")
     >>>     print(df[df['duplicate_period']][['calendarYear', 'period', 'fillingDate']])
+    
+    >>> # Access company metadata
+    >>> df = fmp_incts('AZTA')
+    >>> print(df.attrs['metadata'])
+    
+    >>> # Save with metadata to markdown
+    >>> df = fmp_incts('AZTA', save_md='azenta_financials.md')
     '''
     
     sym = sym.upper().strip()
+    
+    # Fetch company profile metadata
+    try:
+        profile = fmp_profF(sym)
+        metadata = {
+            'companyName': profile.get('companyName'),
+            'cik': profile.get('cik'),
+            'isin': profile.get('isin'),
+            'cusip': profile.get('cusip'),
+            'currency': profile.get('currency'),
+            'exchangeShortName': profile.get('exchangeShortName'),
+            'industry': profile.get('industry'),
+            'sector': profile.get('sector'),
+            'country': profile.get('country')
+        }
+    except Exception as e:
+        print(f"Warning: Could not fetch metadata for {sym}: {e}")
+        metadata = {}
+    
     fetch_period = 'quarter' if period.lower() == 'ttm' else period
     
     # URL construction
@@ -1074,7 +1385,7 @@ def fmp_incts(sym, facs=None, period='quarter', limit=400):
             numeric_cols = df.select_dtypes(include=['number']).columns
             cols_to_sum = [c for c in numeric_cols if 'eps' not in c.lower() and 'Year' not in c and 'shs' not in c.lower()]
 
-                        # FIRST: Average share counts on original data
+            # FIRST: Average share counts on original data
             if 'weightedAverageShsOutDil' in df.columns:
                 df['weightedAverageShsOutDil'] = df['weightedAverageShsOutDil'].rolling(window=window_size).mean()
             
@@ -1166,49 +1477,102 @@ def fmp_incts(sym, facs=None, period='quarter', limit=400):
 
         result_df = df[final_cols]
         result_df.attrs['symbol'] = sym
+        result_df.attrs['metadata'] = metadata
+        result_df.attrs['period'] = period.lower()
+        # Save to markdown if requested
+        if save_md:
+            df_to_markdown_with_metadata(result_df, save_md)
+        
         return result_df
 
     except Exception as e:
         print(f"Error in fmp_incts for {sym}: {e}")
         return pd.DataFrame()
-#-----------------------------------------------------	
-#MOD 2/6/26 5:52PM
-def fmp_incmFmt(df, add_pct_of_revenue=False, filename='income_statement.html'):
-    r"""
-    Formats a Financial Modeling Prep (FMP:NASDAQ) income statement DataFrame into an interactive HTML report.
 
-    This function transforms raw income statement data into a professional HTML document with
+#-----------------------------------------------------------------------
+###Helper function for fmp_incts() and fmp_balts
+#MOD 02/08/26 8:58 AM
+
+def df_to_markdown_with_metadata(df, filename):
+    """
+    Save DataFrame with metadata to markdown file.
+    Transposes DataFrame so dates appear as columns.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with metadata in df.attrs['metadata']
+    filename : str
+        Output filepath for markdown file
+    """
+    md = "# Company Metadata\n\n"
+    
+    # Add symbol if available
+    if 'symbol' in df.attrs:
+        md += f"**Symbol:** {df.attrs['symbol']}  \n"
+    
+    # Add period if available
+    if 'period' in df.attrs:
+        md += f"**Period:** {df.attrs['period']}  \n"
+    
+    md += "\n"
+    
+    # Add company metadata
+    if 'metadata' in df.attrs:
+        for k, v in df.attrs['metadata'].items():
+            md += f"**{k}:** {v}  \n"
+    
+    md += "\n## Financial Data\n\n"
+    md += df.T.to_markdown()
+    
+    with open(filename, 'w') as f:
+        f.write(md)
+    
+    print(f"Saved to {filename}")
+#-----------------------------------------------------	
+#MOD 2/8/26 9:41AM
+def fmp_inctsFMT(df):
+    r"""
+    Formats a fmp_incts() DataFrame into an interactive HTML report.
+
+    This function transforms income statement data into a professional HTML document with
     automatic scaling, financial hierarchy styling, and Chart.js for interactive row-level trend analysis.
 
     Args:
-        df (pd.DataFrame): Raw income statement data (metrics as columns, periods as rows).
-        add_pct_of_revenue (bool): If True, inserts "% of Revenue" rows beneath major line items.
-        filename (str): Output path for the HTML file.
+        df (pd.DataFrame): Income statement data from fmp_incts() (date index, metrics as columns).
 
     Returns:
         None: Writes file to disk and opens it in the default web browser.
 
     Notes:
+        ### Interactive Controls
+        - Toggle % of Revenue button shows/hides percentage rows
+        - Export to Excel button downloads the visible data as Excel file
+        
         ### Scaling Logic
-        The function determines the scale based on the first column's 'Revenue':
-        - If Revenue $\ge 1,000,000,000$, values are divided by $1,000,000$ (Millions).
-        - Otherwise, values are divided by $1,000$ (Thousands).
+        The function determines the scale based on the first period's 'revenue':
+        - If Revenue ≥ 1,000,000,000, values are divided by 1,000,000 (Millions).
+        - Otherwise, values are divided by 1,000 (Thousands).
 
         ### Formulas & Metrics
-        When add_pct_of_revenue is enabled:
-        - $\text{Line Item \%} = \left( \frac{\text{Line Item Value}}{\text{Revenue}} \right) \times 100$
+        % of Revenue rows are calculated as:
+        - Line Item % = (Line Item Value / Revenue) × 100
+        
+        ### Company Metadata
+        Displays symbol, period, and company name from df.attrs if available.
     """
     friendly_names = {
-        'date': 'Date', 
         'reportedCurrency': 'Currency', 
         'calendarYear': 'Year', 
         'period': 'Quarter',
+        'duplicate_period': 'Duplicate Period',
         'revenue': 'Revenue',
         'costOfRevenue': 'Cost of Revenue',
         'grossProfit': 'Gross Profit',
         'researchAndDevelopmentExpenses': 'R&D Expenses',
         'generalAndAdministrativeExpenses': 'G&A Expenses',
         'sellingAndMarketingExpenses': 'Sales & Marketing Expenses',
+        'sga': 'SG&A',
         'otherExpenses': 'Other Expenses',
         'operatingExpenses': 'Operating Expenses',
         'depreciationAndAmortization': 'Depreciation & Amortization',
@@ -1223,63 +1587,78 @@ def fmp_incmFmt(df, add_pct_of_revenue=False, filename='income_statement.html'):
         'eps': 'EPS (Basic)',
         'epsdiluted': 'EPS (Diluted)',
         'weightedAverageShsOut': 'Weighted Avg Shares Outstanding',
-        'weightedAverageShsOutDil': 'Weighted Avg Shares Outstanding (Diluted)'
+        'weightedAverageShsOutDil': 'Weighted Avg Shares Outstanding (Diluted)',
+        'fillingDate': 'Filing Date'
     }
 
-    df_work = df.copy().T
-    df_work = df_work.drop(['fillingDate', 'acceptedDate'], errors='ignore')
+    # Extract metadata for header
+    symbol = df.attrs.get('symbol', 'N/A')
+    period_type = df.attrs.get('period', 'N/A')
+    metadata = df.attrs.get('metadata', {})
+    company_name = metadata.get('companyName', symbol)
+    
+    df_work = df.copy()
+    
+    # Drop validation delta columns
+    delta_cols = [col for col in df_work.columns if '_delta_rpt_vs_calc' in col]
+    df_work = df_work.drop(columns=delta_cols, errors='ignore')
+    
+    # Drop fillingDate if present
+    df_work = df_work.drop(columns=['fillingDate'], errors='ignore')
+    
+    # Transpose so dates are columns
+    df_work = df_work.T
     
     # Determine Scale based on Revenue
     revenue_val = pd.to_numeric(df_work.loc['revenue', df_work.columns[0]], errors='coerce')
     scale_factor = 1_000_000 if revenue_val >= 1_000_000_000 else 1_000
     scale_label = 'Millions' if scale_factor == 1_000_000 else 'Thousands'
 
-    # ADD % OF REVENUE
-    if add_pct_of_revenue:
-        # Tags to add percentage rows for
-        pct_tags = [
-            'costOfRevenue', 'grossProfit', 'researchAndDevelopmentExpenses',
-            'generalAndAdministrativeExpenses', 'sellingAndMarketingExpenses',
-            'otherExpenses', 'operatingExpenses', 'depreciationAndAmortization',
-            'operatingIncome', 'ebitda', 'totalOtherIncomeExpensesNet',
-            'interestIncome', 'interestExpense', 'incomeBeforeTax',
-            'incomeTaxExpense', 'netIncome'
-        ]
-        
-        rows_to_insert = []
-        for tag in pct_tags:
-            if tag in df.columns:
-                pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
-                for col in df_work.columns:
-                    val = pd.to_numeric(df.loc[df.index[df.index.get_loc(col)], tag], errors='coerce')
-                    revenue = pd.to_numeric(df.loc[df.index[df.index.get_loc(col)], 'revenue'], errors='coerce')
-                    pct_row[col] = (val / revenue * 100) if revenue != 0 else np.nan
-                rows_to_insert.append((tag, pct_row))
+    # ALWAYS ADD % OF REVENUE (will be toggled via button)
+    pct_tags = [
+        'costOfRevenue', 'grossProfit', 'researchAndDevelopmentExpenses',
+        'generalAndAdministrativeExpenses', 'sellingAndMarketingExpenses',
+        'sga', 'otherExpenses', 'operatingExpenses', 'depreciationAndAmortization',
+        'operatingIncome', 'ebitda', 'totalOtherIncomeExpensesNet',
+        'interestIncome', 'interestExpense', 'incomeBeforeTax',
+        'incomeTaxExpense', 'netIncome'
+    ]
+    
+    rows_to_insert = []
+    for tag in pct_tags:
+        if tag in df_work.index:
+            pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                revenue = pd.to_numeric(df_work.loc['revenue', col], errors='coerce')
+                pct_row[col] = (val / revenue * 100) if revenue != 0 else np.nan
+            rows_to_insert.append((tag, pct_row))
 
-        # Insert percentage rows in reverse order to maintain positioning
-        for parent_tag, pct_row in reversed(rows_to_insert):
-            if parent_tag in df_work.index:
-                idx_pos = df_work.index.get_loc(parent_tag)
-                df_top = df_work.iloc[:idx_pos+1]
-                df_bottom = df_work.iloc[idx_pos+1:]
-                pct_row.name = f"% of Revenue ({friendly_names.get(parent_tag, parent_tag)})"
-                df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
+    # Insert percentage rows in reverse order to maintain positioning
+    for parent_tag, pct_row in reversed(rows_to_insert):
+        if parent_tag in df_work.index:
+            idx_pos = df_work.index.get_loc(parent_tag)
+            df_top = df_work.iloc[:idx_pos+1]
+            df_bottom = df_work.iloc[idx_pos+1:]
+            pct_row.name = f"% of Revenue ({friendly_names.get(parent_tag, parent_tag)})"
+            df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
 
     # Initial Scaling for main numeric rows (exclude metadata and calculated %)
-    meta_rows = ['date', 'reportedCurrency', 'calendarYear', 'period']
+    meta_rows = ['reportedCurrency', 'calendarYear', 'period', 'duplicate_period']
     for row in df_work.index:
         if row not in meta_rows and "%" not in str(row) and row not in ['eps', 'epsdiluted', 'weightedAverageShsOut', 'weightedAverageShsOutDil']:
             for col in df_work.columns:
                 val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
-                if pd.notna(val) and row in friendly_names:
+                if pd.notna(val):
                     df_work.loc[row, col] = val / scale_factor
 
     # Apply UI Hierarchy
     grand_totals = ['Revenue', 'Gross Profit', 'Operating Income', 'Net Income', 'EBITDA']
-    subtotals = ['Operating Expenses', 'Income Before Tax']
+    subtotals = ['Operating Expenses', 'Income Before Tax', 'SG&A']
 
     def apply_styles(label):
         clean = friendly_names.get(label, label)
+        
         if clean in grand_totals: 
             return f"<strong>{clean}</strong>"
         if clean in subtotals: 
@@ -1308,17 +1687,33 @@ def fmp_incmFmt(df, add_pct_of_revenue=False, filename='income_statement.html'):
                     fmt = "{:,.2f}"
                 df_work.loc[idx, col] = fmt.format(val)
 
+    # Format column headers (dates)
+    df_work.columns = [pd.to_datetime(col).strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(col, errors='coerce')) else str(col) for col in df_work.columns]
+
     # HTML Output with Charting Logic
     table_html = df_work.to_html(classes='income-statement', border=0, escape=False)
+    
+    # Generate unique filename based on symbol and timestamp
+    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"{symbol}_income_statement_{timestamp}.html"
     
     styled_html = f"""
 <!DOCTYPE html>
 <html>
 <head>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body {{ font-family: -apple-system, system-ui, sans-serif; padding: 40px; background-color: #f0f2f5; }}
         .container {{ background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+        .metadata {{ color: #666; font-size: 14px; margin-bottom: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 6px; }}
+        .metadata strong {{ color: #1a1a1a; }}
+        .controls {{ margin-bottom: 20px; padding: 15px; background-color: #e3f2fd; border-radius: 6px; display: flex; gap: 10px; }}
+        .btn {{ padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; }}
+        .btn-primary {{ background-color: #2196F3; color: white; }}
+        .btn-primary:hover {{ background-color: #1976D2; }}
+        .btn-success {{ background-color: #4CAF50; color: white; }}
+        .btn-success:hover {{ background-color: #45a049; }}
         h2 {{ color: #1a1a1a; border-bottom: 3px solid #2196F3; padding-bottom: 15px; margin-bottom: 20px; }}
         .income-statement {{ border-collapse: collapse; width: 100%; font-size: 13px; color: #333; }}
         .income-statement thead th {{ background-color: #2196F3; color: white; padding: 12px 10px; text-align: right; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }}
@@ -1326,6 +1721,7 @@ def fmp_incmFmt(df, add_pct_of_revenue=False, filename='income_statement.html'):
         .income-statement tbody th:hover {{ background-color: #e3f2fd; color: #1565c0; }}
         .income-statement tbody td {{ border: 1px solid #e0e0e0; padding: 8px; text-align: right; }}
         .income-statement tbody tr:nth-child(even) {{ background-color: #fafafa; }}
+        .income-statement tbody tr.pct-row {{ display: none; }}
         strong {{ font-weight: 800 !important; color: #000; }}
         em {{ color: #777; font-size: 0.85em; }}
         #chartModal {{ display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); }}
@@ -1334,9 +1730,66 @@ def fmp_incmFmt(df, add_pct_of_revenue=False, filename='income_statement.html'):
     </style>
 </head>
 <body>
-    <div class="container"><h2>Income Statement (in {scale_label})</h2><div style="overflow-x: auto;">{table_html}</div></div>
-    <div id="chartModal"><div class="modal-content"><span class="close" onclick="closeModal()">&times;</span><canvas id="rowChart"></canvas></div></div>
+    <div class="container">
+        <div class="metadata">
+            <strong>Company:</strong> {company_name} ({symbol}) &nbsp;&nbsp;|&nbsp;&nbsp;
+            <strong>Period:</strong> {period_type.upper()}
+        </div>
+        <div class="controls">
+            <button class="btn btn-primary" id="pctToggle" onclick="togglePercentages()">Show % of Revenue</button>
+            <button class="btn btn-success" onclick="exportToExcel()">Export to Excel</button>
+        </div>
+        <h2>Income Statement (in {scale_label})</h2>
+        <div style="overflow-x: auto;">{table_html}</div>
+    </div>
+    <div id="chartModal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <canvas id="rowChart"></canvas>
+        </div>
+    </div>
     <script>
+        let pctVisible = false;
+        
+        function togglePercentages() {{
+            pctVisible = !pctVisible;
+            const pctRows = document.querySelectorAll('.income-statement tbody tr');
+            const btn = document.getElementById('pctToggle');
+            
+            pctRows.forEach(row => {{
+                const th = row.querySelector('th');
+                if (th && th.innerHTML.includes('% of Revenue')) {{
+                    row.style.display = pctVisible ? 'table-row' : 'none';
+                }}
+            }});
+            
+            btn.textContent = pctVisible ? 'Hide % of Revenue' : 'Show % of Revenue';
+        }}
+        
+        function exportToExcel() {{
+            const table = document.querySelector('.income-statement');
+            const rows = Array.from(table.querySelectorAll('tr')).filter(row => {{
+                // Only include visible rows
+                return row.style.display !== 'none';
+            }});
+            
+            const data = rows.map(row => {{
+                return Array.from(row.querySelectorAll('th, td')).map(cell => {{
+                    // Clean HTML tags and get text
+                    const text = cell.innerText || cell.textContent;
+                    // Try to convert to number if it looks like one
+                    const cleaned = text.replace(/,/g, '');
+                    const num = parseFloat(cleaned);
+                    return isNaN(num) ? text : num;
+                }});
+            }});
+            
+            const ws = XLSX.utils.aoa_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Income Statement");
+            XLSX.writeFile(wb, "{symbol}_income_statement.xlsx");
+        }}
+        
         let myChart = null;
         document.querySelectorAll(".income-statement tbody th").forEach(header => {{
             header.onclick = function() {{
@@ -1347,7 +1800,27 @@ def fmp_incmFmt(df, add_pct_of_revenue=False, filename='income_statement.html'):
                 document.getElementById("chartModal").style.display = "block";
                 if (myChart) myChart.destroy();
                 myChart = new Chart(document.getElementById('rowChart'), {{
-                    type: 'line', data: {{ labels, datasets: [{{ label, data, borderColor: '#2196F3', backgroundColor: 'rgba(33,150,243,0.1)', fill: true, tension: 0.3 }}] }}
+                    type: 'line', 
+                    data: {{ 
+                        labels, 
+                        datasets: [{{ 
+                            label, 
+                            data, 
+                            borderColor: '#2196F3', 
+                            backgroundColor: 'rgba(33,150,243,0.1)', 
+                            fill: true, 
+                            tension: 0.3 
+                        }}] 
+                    }},
+                    options: {{
+                        responsive: true,
+                        plugins: {{
+                            title: {{
+                                display: true,
+                                text: label
+                            }}
+                        }}
+                    }}
                 }});
             }};
         }});
@@ -1359,7 +1832,7 @@ def fmp_incmFmt(df, add_pct_of_revenue=False, filename='income_statement.html'):
     with open(filename, 'w', encoding='utf-8') as f: 
         f.write(styled_html)
     webbrowser.open('file://' + os.path.abspath(filename))
-
+    print(f"Saved to: {filename}")
 #-----------------------------------------------------------------
 ## MOD  01/18/2026 7:00 AM
 
@@ -1443,17 +1916,31 @@ def fmp_inctsar(sym, facs=None, period='quarter', limit=400):
 
 
 #--------------------------------------------------------
-# 2026-01-18 07:55:12
+# 2026-02-08 09:01:12
 
-def fmp_cashfts(sym, facs=None, period='quarter', limit=400):
+def fmp_cashfts(sym, facs=None, period='quarter', limit=400, save_md=None):
     '''
     Retrieves standardized Cash Flow Statement data from the FMP v3 endpoint.
-    Includes auto-pruning of empty columns and TTM logic support.
+    Displays FMP reported totals and validates against calculated component sums.
     
     Parameters:
     -----------
     sym : str
         The stock ticker symbol (e.g., 'AAPL').
+    
+    period : str, default='quarter'
+        The reporting period to retrieve:
+        - 'quarter' : Quarterly financial statements (default)
+        - 'annual'  : Annual financial statements (FY only)
+        - 'ttm'     : Trailing Twelve Months (rolling 4-quarter sum)
+    
+    limit : int, default=400
+        Maximum number of periods to retrieve from FMP.
+        - For 'quarter' and 'annual': Returns up to `limit` periods
+        - For 'ttm': Returns approximately `limit - 3` TTM periods
+          (Formula: ttm_periods = limit - 3, so limit = desired_ttm_periods + 3)
+          Examples: limit=8 → 5 TTM periods, limit=23 → 20 TTM periods
+    
     facs : list, optional
         List of specific line items to return. If None, returns the full standard set.
         
@@ -1461,92 +1948,382 @@ def fmp_cashfts(sym, facs=None, period='quarter', limit=400):
         ['reportedCurrency', 'calendarYear', 'period']
         
         AVAILABLE TAGS:
-        ['fillingDate', 'acceptedDate','netIncome', 'depreciationAndAmortization', 'deferredIncomeTax', 
+        Operating Activities Components:
+        ['netIncome', 'depreciationAndAmortization', 'deferredIncomeTax', 
          'stockBasedCompensation', 'changeInWorkingCapital', 'accountsReceivables', 
-         'inventory', 'accountsPayables', 'otherWorkingCapital', 'otherNonCashItems', 
-         'netCashProvidedByOperatingActivities', 'investmentsInPropertyPlantAndEquipment', 
-         'acquisitionsNet', 'purchasesOfInvestments', 'salesMaturitiesOfInvestments', 
-         'otherInvestingActivites', 'netCashUsedForInvestingActivites', 'debtRepayment', 
-         'commonStockIssued', 'commonStockRepurchased', 'dividendsPaid', 
-         'otherFinancingActivites', 'netCashUsedProvidedByFinancingActivities', 
-         'effectOfForexChangesOnCash', 'netChangeInCash', 'cashAtEndOfPeriod', 
-         'cashAtBeginningOfPeriod', 'operatingCashFlow', 'capitalExpenditure', 
-         'freeCashFlow', 'link', 'finalLink' ]
+         'inventory', 'accountsPayables', 'otherWorkingCapital', 'otherNonCashItems']
+        
+        Investing Activities Components:
+        ['investmentsInPropertyPlantAndEquipment', 'acquisitionsNet', 
+         'purchasesOfInvestments', 'salesMaturitiesOfInvestments', 'otherInvestingActivites']
+        
+        Financing Activities Components:
+        ['debtRepayment', 'commonStockIssued', 'commonStockRepurchased', 
+         'dividendsPaid', 'otherFinancingActivites']
+        
+        Cash Reconciliation:
+        ['effectOfForexChangesOnCash', 'netChangeInCash', 
+         'cashAtEndOfPeriod', 'cashAtBeginningOfPeriod']
+        
+        FMP Reported Totals (from 10-Q/10-K):
+        ['netCashProvidedByOperatingActivities', 'netCashUsedForInvestingActivites',
+         'netCashUsedProvidedByFinancingActivities', 'operatingCashFlow', 
+         'capitalExpenditure', 'freeCashFlow']
+        
+        Validation Deltas (Reported - Calculated from Components):
+        ['netCashProvidedByOperatingActivities_delta_rpt_vs_calc',
+         'netCashUsedForInvestingActivites_delta_rpt_vs_calc',
+         'netCashUsedProvidedByFinancingActivities_delta_rpt_vs_calc',
+         'netChangeInCash_delta_rpt_vs_calc',
+         'freeCashFlow_delta_rpt_vs_calc',
+         'cashAtEndOfPeriod_delta_rpt_vs_calc']
+        
+        Data Quality Flags:
+        ['duplicate_period'] - True if multiple filings exist for same calendarYear/period
+        
+        Metadata:
+        ['fillingDate']
+    
+    save_md : str, optional
+        Filepath to save DataFrame with metadata as markdown file.
+        If provided, saves output with company metadata header.
+        Example: save_md='apple_cash_flow.md'
+    
+    Returns:
+    --------
+    pd.DataFrame
+        Cash flow statement data with date index and symbol stored in df.attrs['symbol']
+        Company metadata stored in df.attrs['metadata'] containing:
+        ['companyName', 'cik', 'isin', 'cusip', 'currency', 'exchangeShortName',
+         'industry', 'sector', 'country']
+        Period type stored in df.attrs['period'] ('quarter', 'annual', or 'ttm')
+    
+    LLM Context for Validation Columns:
+    ------------------------------------
+    This dataset includes validation columns (suffix: _delta_rpt_vs_calc) that verify 
+    cash flow statement internal consistency.
+    
+    Formula: Δ = FMP_reported_value - calculated_from_components
+    
+    Validation Columns & Their Formulas:
+    - netCashProvidedByOperatingActivities_delta_rpt_vs_calc = 
+        netCashProvidedByOperatingActivities(rpt) - (netIncome + depreciationAndAmortization + 
+        deferredIncomeTax + stockBasedCompensation + changeInWorkingCapital + otherNonCashItems)
+    - netCashUsedForInvestingActivites_delta_rpt_vs_calc = 
+        netCashUsedForInvestingActivites(rpt) - (investmentsInPropertyPlantAndEquipment + 
+        acquisitionsNet + purchasesOfInvestments + salesMaturitiesOfInvestments + otherInvestingActivites)
+    - netCashUsedProvidedByFinancingActivities_delta_rpt_vs_calc = 
+        netCashUsedProvidedByFinancingActivities(rpt) - (debtRepayment + commonStockIssued + 
+        commonStockRepurchased + dividendsPaid + otherFinancingActivites)
+    - netChangeInCash_delta_rpt_vs_calc = 
+        netChangeInCash(rpt) - (netCashProvidedByOperatingActivities + netCashUsedForInvestingActivites + 
+        netCashUsedProvidedByFinancingActivities + effectOfForexChangesOnCash)
+    - freeCashFlow_delta_rpt_vs_calc = 
+        freeCashFlow(rpt) - (operatingCashFlow + capitalExpenditure)
+    - cashAtEndOfPeriod_delta_rpt_vs_calc = 
+        cashAtEndOfPeriod(rpt) - (cashAtBeginningOfPeriod + netChangeInCash)
+    
+    Interpreting Validation Deltas:
+    Δ = 0        → Components reconcile perfectly with reported total ✓
+    Δ > 0        → Reported total exceeds component sum
+                   CAUSE: Component breakdown not disclosed in filing
+                   EXAMPLE: Company reports "Other Non-Cash Items" as single line without detail
+    Δ < 0        → Component sum exceeds reported total
+                   CAUSE: Potential data quality issue or parsing error 🚩
+    Small Δ      → Rounding differences (typically <0.1% of operating cash flow)
+    
+    Special Note on cashAtEndOfPeriod_delta_rpt_vs_calc:
+    For quarterly and annual periods, this should ALWAYS equal zero in valid financial statements.
+    For TTM periods, validation deltas are calculated BEFORE rolling sums, so deltas represent
+    the most recent quarter's reconciliation quality.
+    Non-zero values indicate data quality issues requiring manual review.
+    
+    Common Patterns:
+    1. netCashProvidedByOperatingActivities_delta_rpt_vs_calc > 0 with otherNonCashItems = 0
+       → Company doesn't break out all operating activity adjustments (normal)
+    
+    2. netChangeInCash_delta_rpt_vs_calc ≠ 0
+       → Check if all three activity sections reconcile individually first
+    
+    3. cashAtEndOfPeriod_delta_rpt_vs_calc ≠ 0
+       → Flag for immediate manual review 🚩
+    
+    When asked to verify data quality:
+    1. Check cashAtEndOfPeriod_delta_rpt_vs_calc first (must be 0 for quarterly/annual)
+    2. For other deltas, check if delta = 0 (perfect reconciliation)
+    3. If delta > 0, check if components exist (look for zeros)
+    4. If components are zero, delta indicates missing breakdown (expected)
+    5. If components exist but don't sum, flag as data quality issue
+    6. Calculate delta as % of reported value to assess materiality
+    
+    Data Quality Flag - duplicate_period:
+    - False: Single filing for this period (normal)
+    - True: Multiple filings exist for same calendarYear/period combination
+           CAUSES: Amended filings, restatements, or FMP data quality issues
+           ACTION: Review fillingDate to identify most recent filing, or 
+                   manually verify which filing to use
+    
+    TTM Period Notes:
+    - Cash flow line items are summed over rolling 4 quarters
+    - duplicate_period flag not applicable (TTM aggregates across periods)
+    - cashAtEndOfPeriod and cashAtBeginningOfPeriod use the most recent quarter values (not summed)
+    - Validation deltas calculated on quarterly data BEFORE rolling sums
+    - TTM rows show most recent quarter's validation quality
+    
+    Metadata Notes:
+    - Company metadata is fetched via fmp_profF() and attached to df.attrs['metadata']
+    - Metadata persists in Python session but not in all file formats
+    - Use save_md parameter to export with metadata preserved in markdown format
+    - Access metadata: df.attrs['metadata']
+    - Period type: df.attrs['period']
+    
+    Examples:
+    ---------
+    >>> # Get last 8 quarters
+    >>> df = fmp_cashfts('AAPL', period='quarter', limit=8)
+    
+    >>> # Get last 5 years annual
+    >>> df = fmp_cashfts('AAPL', period='annual', limit=5)
+    
+    >>> # Get last 20 TTM periods
+    >>> df = fmp_cashfts('AAPL', period='ttm', limit=23)
+    
+    >>> # Get specific fields only
+    >>> df = fmp_cashfts('AAPL', facs=['operatingCashFlow', 'freeCashFlow', 'capitalExpenditure'])
+    
+    >>> # Check for duplicate filings
+    >>> df = fmp_cashfts('AZTA', period='quarter', limit=8)
+    >>> if df['duplicate_period'].any():
+    >>>     print("Warning: Multiple filings detected")
+    >>>     print(df[df['duplicate_period']][['calendarYear', 'period', 'fillingDate']])
+    
+    >>> # Verify cash reconciliation
+    >>> df = fmp_cashfts('AAPL')
+    >>> if df['cashAtEndOfPeriod_delta_rpt_vs_calc'].abs().max() > 0:
+    >>>     print("WARNING: Cash reconciliation doesn't balance!")
+    
+    >>> # Access company metadata
+    >>> df = fmp_cashfts('AZTA')
+    >>> print(df.attrs['metadata'])
+    >>> print(df.attrs['period'])
+    
+    >>> # Save with metadata to markdown
+    >>> df = fmp_cashfts('AZTA', save_md='azenta_cash_flow.md')
     '''
-    # 1. Define the internal list of available financial tags
-    available_tags = [
-        'fillingDate', 'acceptedDate','netIncome', 'depreciationAndAmortization', 'deferredIncomeTax', 
-        'stockBasedCompensation', 'changeInWorkingCapital', 'accountsReceivables', 
-        'inventory', 'accountsPayables', 'otherWorkingCapital', 'otherNonCashItems', 
-        'netCashProvidedByOperatingActivities', 'investmentsInPropertyPlantAndEquipment', 
-        'acquisitionsNet', 'purchasesOfInvestments', 'salesMaturitiesOfInvestments', 
-        'otherInvestingActivites', 'netCashUsedForInvestingActivites', 'debtRepayment', 
-        'commonStockIssued', 'commonStockRepurchased', 'dividendsPaid', 
-        'otherFinancingActivites', 'netCashUsedProvidedByFinancingActivities', 
-        'effectOfForexChangesOnCash', 'netChangeInCash', 'cashAtEndOfPeriod', 
-        'cashAtBeginningOfPeriod', 'operatingCashFlow', 'capitalExpenditure', 
-        'freeCashFlow'
-    ]
-
+    
     sym = sym.upper().strip()
+    
+    # Fetch company profile metadata
+    try:
+        profile = fmp_profF(sym)
+        metadata = {
+            'companyName': profile.get('companyName'),
+            'cik': profile.get('cik'),
+            'isin': profile.get('isin'),
+            'cusip': profile.get('cusip'),
+            'currency': profile.get('currency'),
+            'exchangeShortName': profile.get('exchangeShortName'),
+            'industry': profile.get('industry'),
+            'sector': profile.get('sector'),
+            'country': profile.get('country')
+        }
+    except Exception as e:
+        print(f"Warning: Could not fetch metadata for {sym}: {e}")
+        metadata = {}
+    
     fetch_period = 'quarter' if period.lower() == 'ttm' else period
+    
+    # URL construction
     url = f'https://financialmodelingprep.com/api/v3/cash-flow-statement/{sym}?period={fetch_period}&limit={limit}&apikey={apikey}'
     url = requote_uri(url)
 
     try:
         response = urlopen(url, context=ssl_context)
         stuff = json.loads(response.read().decode("utf-8"))
-        if not stuff or not isinstance(stuff, list): return pd.DataFrame()
+        if not stuff or not isinstance(stuff, list):
+            return pd.DataFrame()
 
         df = pd.DataFrame(stuff)
         
-        # Ensure date is the index
         if 'date' in df.columns:
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
             df.index.name = 'date'
         
         df = df.sort_index()
-
-        # Logic: Drop columns that are 100% NaN
-        df = df.dropna(axis=1, how='all')
-
-        # Define Mandatory Columns (always shown first)
-        mandatory_cols = ['reportedCurrency', 'calendarYear', 'period']
         
-        # If facs is None, use the full available tag list
-        if facs is None:
-            facs = available_tags
-            
-        # Clean the facs list to ensure they exist and don't duplicate mandatory/index cols
-        clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date', 'symbol'])]
-
-        # Handle TTM / Annual logic
+        # Drop columns that are 100% NaN
+        df = df.dropna(axis=1, how='all')
+        
+        # Flag duplicate periods (for quarter and annual only, not TTM)
+        if period.lower() in ['quarter', 'annual']:
+            df['duplicate_period'] = df.duplicated(subset=['calendarYear', 'period'], keep=False)
+        
+        # Calculate internal validation values BEFORE TTM rolling sums
+        # Operating Activities
+        df['netCashProvidedByOperatingActivities_internal'] = (
+            df['netIncome'].fillna(0) +
+            df['depreciationAndAmortization'].fillna(0) +
+            df['deferredIncomeTax'].fillna(0) +
+            df['stockBasedCompensation'].fillna(0) +
+            df['changeInWorkingCapital'].fillna(0) +
+            df['otherNonCashItems'].fillna(0)
+        )
+        
+        # Investing Activities
+        df['netCashUsedForInvestingActivites_internal'] = (
+            df['investmentsInPropertyPlantAndEquipment'].fillna(0) +
+            df['acquisitionsNet'].fillna(0) +
+            df['purchasesOfInvestments'].fillna(0) +
+            df['salesMaturitiesOfInvestments'].fillna(0) +
+            df['otherInvestingActivites'].fillna(0)
+        )
+        
+        # Financing Activities
+        df['netCashUsedProvidedByFinancingActivities_internal'] = (
+            df['debtRepayment'].fillna(0) +
+            df['commonStockIssued'].fillna(0) +
+            df['commonStockRepurchased'].fillna(0) +
+            df['dividendsPaid'].fillna(0) +
+            df['otherFinancingActivites'].fillna(0)
+        )
+        
+        # Net Change in Cash
+        df['netChangeInCash_internal'] = (
+            df['netCashProvidedByOperatingActivities'].fillna(0) +
+            df['netCashUsedForInvestingActivites'].fillna(0) +
+            df['netCashUsedProvidedByFinancingActivities'].fillna(0) +
+            df['effectOfForexChangesOnCash'].fillna(0)
+        )
+        
+        # Free Cash Flow
+        df['freeCashFlow_internal'] = (
+            df['operatingCashFlow'].fillna(0) +
+            df['capitalExpenditure'].fillna(0)
+        )
+        
+        # Cash at End of Period
+        df['cashAtEndOfPeriod_internal'] = (
+            df['cashAtBeginningOfPeriod'].fillna(0) +
+            df['netChangeInCash'].fillna(0)
+        )
+        
+        # Calculate validation deltas on quarterly data
+        delta_mappings = {
+            'netCashProvidedByOperatingActivities': 'netCashProvidedByOperatingActivities_internal',
+            'netCashUsedForInvestingActivites': 'netCashUsedForInvestingActivites_internal',
+            'netCashUsedProvidedByFinancingActivities': 'netCashUsedProvidedByFinancingActivities_internal',
+            'netChangeInCash': 'netChangeInCash_internal',
+            'freeCashFlow': 'freeCashFlow_internal',
+            'cashAtEndOfPeriod': 'cashAtEndOfPeriod_internal'
+        }
+        
+        for reported_col, calc_col in delta_mappings.items():
+            delta_col = f'{reported_col}_delta_rpt_vs_calc'
+            df[delta_col] = df[reported_col].fillna(0) - df[calc_col].fillna(0)
+        
+        # Drop temporary internal calculation columns
+        calc_cols = [col for col in df.columns if col.endswith('_internal')]
+        df = df.drop(columns=calc_cols)
+        
+        # TTM period calculations (AFTER validation deltas calculated)
         if period.lower() == 'ttm':
             df = df.reset_index()
-            df = df.drop_duplicates(subset=['calendarYear', 'period'], keep='last')
             window_size = df['period'].nunique() if df['period'].nunique() in [2, 4] else 4
             
+            # Identify columns to sum vs. keep as-is
             numeric_cols = df.select_dtypes(include=['number']).columns
-            # Ensure we only sum appropriate line items (avoid years/dates)
-            cols_to_sum = [c for c in numeric_cols if c in clean_facs and 'Year' not in c]
             
-            df_ttm = df.copy()
-            df_ttm[cols_to_sum] = df[cols_to_sum].rolling(window=window_size).sum()
-            df = df_ttm.dropna(subset=[cols_to_sum[0]]).set_index('date')
-
+            # Don't sum these point-in-time values
+            point_in_time_cols = ['cashAtEndOfPeriod', 'cashAtBeginningOfPeriod']
+            
+            # Don't sum Year or validation deltas (deltas represent quarterly reconciliation quality)
+            cols_to_sum = [c for c in numeric_cols if 'Year' not in c and 
+                          c not in point_in_time_cols and
+                          '_delta_rpt_vs_calc' not in c]
+            
+            # Sum flow items
+            df[cols_to_sum] = df[cols_to_sum].rolling(window=window_size).sum()
+            
+            # For cash balances, keep most recent value (point-in-time, not cumulative)
+            # cashAtEndOfPeriod already has most recent value
+            # cashAtBeginningOfPeriod needs to reference 4 quarters ago
+            if 'cashAtBeginningOfPeriod' in df.columns:
+                df['cashAtBeginningOfPeriod'] = df['cashAtBeginningOfPeriod'].shift(window_size - 1)
+            
+            # Validation deltas stay as-is (represent most recent quarter's reconciliation)
+            
+            # Drop incomplete rolling windows
+            df = df.dropna(subset=[cols_to_sum[0]]).set_index('date')
+        
         elif period.lower() == 'annual':
             df = df[df['period'] == 'FY']
-
-        # Combine the lists for final output
-        final_cols = mandatory_cols + [f for f in clean_facs if f in df.columns]
-
-        return df[final_cols]
+        
+        # Define standard column order
+        standard_order = [
+            'reportedCurrency', 'calendarYear', 'period', 'duplicate_period',
+            # Operating Activities
+            'netIncome', 'depreciationAndAmortization', 'deferredIncomeTax',
+            'stockBasedCompensation', 'changeInWorkingCapital', 
+            'accountsReceivables', 'inventory', 'accountsPayables', 
+            'otherWorkingCapital', 'otherNonCashItems',
+            'netCashProvidedByOperatingActivities', 'operatingCashFlow',
+            # Investing Activities
+            'investmentsInPropertyPlantAndEquipment', 'acquisitionsNet',
+            'purchasesOfInvestments', 'salesMaturitiesOfInvestments',
+            'otherInvestingActivites', 'netCashUsedForInvestingActivites',
+            # Financing Activities
+            'debtRepayment', 'commonStockIssued', 'commonStockRepurchased',
+            'dividendsPaid', 'otherFinancingActivites',
+            'netCashUsedProvidedByFinancingActivities',
+            # Cash Reconciliation
+            'effectOfForexChangesOnCash', 'netChangeInCash',
+            'cashAtBeginningOfPeriod', 'cashAtEndOfPeriod',
+            # Derived Metrics
+            'capitalExpenditure', 'freeCashFlow',
+            # Validation Deltas
+            'netCashProvidedByOperatingActivities_delta_rpt_vs_calc',
+            'netCashUsedForInvestingActivites_delta_rpt_vs_calc',
+            'netCashUsedProvidedByFinancingActivities_delta_rpt_vs_calc',
+            'netChangeInCash_delta_rpt_vs_calc',
+            'freeCashFlow_delta_rpt_vs_calc',
+            'cashAtEndOfPeriod_delta_rpt_vs_calc',
+            # Metadata
+            'fillingDate'
+        ]
+        
+        mandatory_cols = ['reportedCurrency', 'calendarYear', 'period']
+        
+        # Build final column list
+        if facs is None:
+            final_cols = mandatory_cols.copy()
+            for col in standard_order:
+                if col in df.columns and col not in final_cols:
+                    final_cols.append(col)
+        else:
+            clean_facs = [f for f in facs if f in df.columns and f not in (mandatory_cols + ['date', 'symbol'])]
+            final_cols = mandatory_cols.copy()
+            for col in standard_order:
+                if col in clean_facs and col not in final_cols:
+                    final_cols.append(col)
+            for col in clean_facs:
+                if col not in final_cols:
+                    final_cols.append(col)
+        
+        result_df = df[final_cols]
+        result_df.attrs['symbol'] = sym
+        result_df.attrs['metadata'] = metadata
+        result_df.attrs['period'] = period.lower()
+        
+        # Save to markdown if requested
+        if save_md:
+            df_to_markdown_with_metadata(result_df, save_md)
+        
+        return result_df
 
     except Exception as e:
         print(f"Error in fmp_cashfts for {sym}: {e}")
         return pd.DataFrame()
-
 #-----------------------------------------------------
 # 2026-01-18 07:55:35
 def fmp_cashftsar(sym, facs=None, period='quarter', limit=400):
