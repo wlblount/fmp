@@ -8,7 +8,7 @@
 
 from IPython.display import display, Markdown
 
-
+import concurrent.futures
 import time
 import certifi
 import ssl
@@ -87,70 +87,216 @@ def fmp_price(syms, start='1960-01-01', end=str(dt.datetime.now().date()), facs=
 
 
 #-----------------------------------------------------
-def fmp_priceMult(syms, start='1960-01-01', end=str(dt.datetime.now().date()), fac='adjClose'):
+#MOD 020826 9:08PM
+def fmp_priceMult(symbols, start_date=None, end_date=None, facs='close'):
+    """
+    ****ONLY RETURNS 1 YEAR OF DATA*****  Fetches historical price data for multiple symbols from Financial Modeling Prep API.
     
-    '''
-    Historical Price limited to 1 year. - Mutiple Symbols - Single Fac
-    ***Max 5 symbols... returns the 1st 5 symbols without error***
-    syms: list of strings separated by commas ['SPY,'TLT']
-    start/end = string like 'YYYY-mm-dd'
-    facs= returns any of: 'open', 'high', 'low', 'close', 'adjClose', 'volume', 'unadjustedVolume', 
-    'change', 'changePercent', 'vwap', 'label', 'changeOverTime' with facs as column names 
-    returns: Df with syms as columns
-    '''
-    syms=tuple(syms)
-    syms=','.join(syms)
+    Parameters
+    ----------
+    symbols : list of str
+        A list of stock ticker symbols (e.g., ['AAPL', 'MSFT']).
+    start_date : str, optional
+        The start date for data in 'YYYY-MM-DD' format (mapped to API param 'from').
+        Default is None.
+    end_date : str, optional
+        The end date for data in 'YYYY-MM-DD' format (mapped to API param 'to').
+        Default is None.
+    facs : str, default 'close'
+        The price column to extract. Must be either 'close' or 'adjClose'.
 
-    url=requote_uri('https://financialmodelingprep.com/api/v3/historical-price-full/'+syms+'?from='+start+'&to='+end+'&apikey='+apikey)
-    response = urlopen(url, context=ssl_context)
-    data = response.read().decode("utf-8")
-    stuff=json.loads(data)
-    data=stuff['historicalStockList'] 
-    idx=[x['date'] for x in data[0]['historical']]
-    idx=pd.to_datetime(idx)
-    df = pd.DataFrame({d['symbol']: [x[fac] for x in d['historical']] for d in data}, 
-                  index=idx)
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame with a DateTimeIndex and columns corresponding to the provided symbols.
+        Each column contains the values for the specified 'facs' parameter.
+    """
+    
+    # Validate the facs parameter
+    if facs not in ['close', 'adjClose']:
+        raise ValueError("Parameter 'facs' must be either 'close' or 'adjClose'")
+    
+    # Ensure symbols is a list
+    if isinstance(symbols, str):
+        symbols = [symbols]
 
-    print ('fac= ', fac)
-    return df.iloc[::-1]
+    all_data_series = []
+    
+    # FMP API URL base
+    base_url = "https://financialmodelingprep.com/api/v3/historical-price-full/"
+    
+    # Loop through symbols in chunks of 5
+    chunk_size = 5
+    for i in range(0, len(symbols), chunk_size):
+        chunk = symbols[i : i + chunk_size]
+        symbol_str = ",".join(chunk)
+        
+        # Construct URL
+        # Assumes 'apikey' is defined in the global scope as requested
+        url = f"{base_url}{symbol_str}?apikey={apikey}"
+        
+        if start_date:
+            url += f"&from={start_date}"
+        if end_date:
+            url += f"&to={end_date}"
+            
+        try:
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Normalize response structure
+            # FMP returns "historicalStockList" for multiple symbols, 
+            # but sometimes a single object for a single symbol request.
+            stock_list = []
+            if "historicalStockList" in data:
+                stock_list = data["historicalStockList"]
+            elif "symbol" in data and "historical" in data:
+                stock_list = [data]
+            
+            # Process each stock in the batch
+            for stock in stock_list:
+                ticker = stock.get('symbol')
+                history = stock.get('historical', [])
+                
+                if not history:
+                    continue
+                
+                # Create a temporary DataFrame for this specific symbol
+                df_temp = pd.DataFrame(history)
+                
+                # Convert date to datetime objects
+                df_temp['date'] = pd.to_datetime(df_temp['date'])
+                df_temp.set_index('date', inplace=True)
+                
+                # Extract the requested column (close or adjClose) and rename it to the ticker
+                if facs in df_temp.columns:
+                    # Creating a Series named after the ticker
+                    s_temp = df_temp[facs].rename(ticker)
+                    all_data_series.append(s_temp)
+                    
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching batch {chunk}: {e}")
+            continue
+
+    # If no data was retrieved, return empty DataFrame
+    if not all_data_series:
+        return pd.DataFrame()
+
+    # Concatenate all series into a single DataFrame based on the date index
+    # This automatically aligns dates and handles missing data (NaN)
+    final_df = pd.concat(all_data_series, axis=1)
+    
+    # Sort by date ascending
+    final_df.sort_index(inplace=True)
+    
+    return final_df
 
 
 
 #----------------------------------------------------------------------------
 
+#MOD 020826 9:09PM
+def fmp_priceLoop(syms, start='1960-01-01', end=None, fac='close', supress=True, max_workers=20):
+    """
+    Fetches historical price data for multiple symbols in parallel using the FMP API.
+    
+    This function optimizes data retrieval by using a ThreadPoolExecutor to make concurrent 
+    API requests, significantly reducing the total time required compared to a sequential loop.
+    It aggregates the results into a single DataFrame where columns correspond to symbols.
 
-def fmp_priceLoop(syms, start='1960-01-01', end=str(dt.datetime.now().date()), fac='close', supress=True):
-    '''
-    Multi Symbols no limit on history.
-    sym: string or a list of strings
-    start/end = string like 'YYYY-mm-dd'
-    facs= returns one of: 'open', 'high', 'low', 'close', 'adjClose', 'volume', 'unadjustedVolume', 
-    'change', 'changePercent', 'vwap', 'label', 'changeOverTime' with facs as column names
-    returns df: for single sym column names are facs, for mult sym column names are sym:facs
-    '''
-    df=pd.DataFrame()
-    # In fmp.py inside fmp_priceLoop function
+    Parameters
+    ----------
+    syms : list of str
+        A list of stock ticker symbols to fetch (e.g., ['AAPL', 'MSFT', 'GOOG']).
+    
+    start : str, optional
+        The start date for data retrieval in 'YYYY-MM-DD' format. 
+        Default is '1960-01-01'.
+    
+    end : str, optional
+        The end date for data retrieval in 'YYYY-MM-DD' format. 
+        If None, defaults to the current date.
+    
+    fac : str, default 'close'
+        The specific data field to extract for each symbol. 
+        Common options include: 'open', 'high', 'low', 'close', 'adjClose', 'volume'.
+        Note: The underlying 'fmp_price' function must support this list format.
+    
+    supress : bool, default True
+        If True, suppresses progress bars and error messages for missing data.
+        If False, displays a tqdm progress bar and prints symbols that returned no data.
+    
+    max_workers : int, default 20
+        The maximum number of concurrent threads to use for downloading. 
+        Higher numbers are faster but may hit API rate limits or cause stability issues.
 
-    if supress:
-        for i in syms:
-            dff = fmp_price(i, start=start, end=end, facs=[fac])
-        
-            # NEW: Check if dff is empty before assigning
-            if not dff.empty:
-                df[i] = dff
-            else:
-                print(f"Skipping {i}: No data returned.")
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame indexed by Date (datetime64[ns]).
+        - Columns are labeled with the ticker symbols.
+        - Values correspond to the requested 'fac' (e.g., closing prices).
+        - Rows are sorted by date in ascending order.
+        - If no data is found for any symbol, returns an empty DataFrame.
 
-    else:
-        # Do the same check for the non-supressed loop if you use it
-        for i in notebook.tqdm(syms, disable=False):
-            dff = fmp_price(i, start=start, end=end, facs=[fac])
+    Examples
+    --------
+    >>> tickers = ['AAPL', 'MSFT', 'NVDA']
+    >>> df = fmp_priceLoop(tickers, start='2023-01-01', fac='adjClose')
+    >>> print(df.head())
+                  AAPL    MSFT    NVDA
+    2023-01-03  125.07  239.58  143.15
+    2023-01-04  126.36  229.10  147.49
+    """
+    
+    # Handle dynamic default date (today)
+    if end is None:
+        end = str(dt.datetime.now().date())
+
+    # Helper function to run inside threads
+    def fetch_single_symbol(symbol):
+        try:
+            # Calls the existing single-symbol function (must be defined in scope)
+            dff = fmp_price(symbol, start=start, end=end, facs=[fac])
             
             if not dff.empty:
-                df[i] = dff
-   
-    return df
+                # Rename the single column to the symbol name for the final merge
+                dff.columns = [symbol]
+                return dff
+            return None
+        except Exception:
+            return None
 
+    results = []
+
+    # execute in parallel using threads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        futures = {executor.submit(fetch_single_symbol, s): s for s in syms}
+        
+        # Determine iterator based on suppression
+        if not supress:
+            iterator = tqdm(concurrent.futures.as_completed(futures), total=len(syms), desc="Fetching Data")
+        else:
+            iterator = concurrent.futures.as_completed(futures)
+
+        # Collect results as they complete
+        for future in iterator:
+            dff = future.result()
+            if dff is not None:
+                results.append(dff)
+            elif not supress:
+                # Retrieve the symbol from the futures dict to print which one failed
+                print(f"No data returned for symbol: {futures[future]}")
+
+    # High-performance merge using concat (vs sequential assignment)
+    if results:
+        df = pd.concat(results, axis=1)
+        df.sort_index(inplace=True)
+        return df
+    
+    return pd.DataFrame()
 #-----------------------------------------------------
 
 def fmp_priceLbk(sym, date,facs=['close']):  
@@ -596,184 +742,208 @@ def fmp_balts(sym, facs=None, period='quarter', limit=8, save_md=None):
         return pd.DataFrame()
 #---------------------------------------------------------------------------
 
-def fmp_baltsFmt(df, add_ratios=False, add_asset_composition=False, add_risk_metrics=False, filename='balance_sheet.html'):
+# MOD 2/8/26 11:15AM
+def fmp_baltsFMT(df):
     r"""
-    Restored: Working Capital and RE/TA Risk Metrics.
-    Features: Asset/Liability % Composition, Ratios, Dynamic Indentation, and Charting.
-
-    **************Formats a Financial Modeling Prep (FMP:NASDAQ) balance sheet DataFrame into an interactive HTML report.
-
-    This function transforms raw financial data into a professional HTML document. It handles 
-    automatic scaling, applies financial hierarchy styling, and injects Chart.js for 
-    interactive row-level trend analysis.
-
-    Args:
-        df (pd.DataFrame): Raw balance sheet data (metrics as columns, periods as rows).
-        add_ratios (bool): If True, appends liquidity and leverage ratios.
-        add_asset_composition (bool): If True, inserts "% of Total Assets" for major line items.
-        add_risk_metrics (bool): If True, appends solvency and capital health metrics.
-        filename (str): Output path for the HTML file.
-
-    Returns:
-        None: Writes file to disk and opens it in the default web browser.
-
-    Notes:
-        ### Scaling Logic
-        The function determines the scale based on the first column's 'Total Assets':
-        - If Total Assets $\ge 1,000,000,000$, values are divided by $1,000,000$ (Millions).
-        - Otherwise, values are divided by $1,000$ (Thousands).
-
-        ### Formulas & Metrics
-        When optional flags are enabled, the following calculations are applied:
-
-        **1. Asset Composition**
-        - $\text{Line Item \%} = \left( \frac{\text{Line Item Value}}{\text{Total Assets}} \right) \times 100$
-
-        **2. Ratios**
-        - $\text{Current Ratio} = \frac{\text{Total Current Assets}}{\text{Total Current Liabilities}}$
-        - $\text{Debt-to-Equity} = \frac{\text{Total Debt}}{\text{Total Stockholders Equity}}$
-
-        **3. Risk Metrics**
-        - $\text{Working Capital} = \text{Total Current Assets} - \text{Total Current Liabilities}$
-        - $\text{TCE Ratio (Tangible Common Equity)} = \frac{\text{Equity} - \text{Goodwill} - \text{Intangibles}}{\text{Total Assets}} \times 100$
-        - $\text{RE/TA} = \left( \frac{\text{Retained Earnings}}{\text{Total Assets}} \right) \times 100$
+    Formats a fmp_balts() DataFrame into an interactive HTML report.
+    Drops validation/delta columns to match fmp_inctsFMT() behavior.
     """
     friendly_names = {
-        'date': 'Date', 'reportedCurrency': 'Currency', 'calendarYear': 'Year', 'period': 'Quarter',
-        'cashAndCashEquivalents': 'Cash & Equivalents', 'shortTermInvestments': 'Short-term Investments',
-        'netReceivables': 'Net Receivables', 'inventory': 'Inventory', 'otherCurrentAssets': 'Other Current Assets',
-        'totalCurrentAssets': 'Total Current Assets', 'propertyPlantEquipmentNet': 'PP&E (Net)',
-        'goodwill': 'Goodwill', 'intangibleAssets': 'Intangible Assets', 'longTermInvestments': 'Long-term Investments',
-        'taxAssets': 'Tax Assets', 'otherNonCurrentAssets': 'Other Non-Current Assets',
-        'totalNonCurrentAssets': 'Total Non-Current Assets', 'totalAssets': 'Total Assets',
-        'accountPayables': 'Accounts Payable', 'shortTermDebt': 'Short-term Debt',
-        'taxPayables': 'Tax Payables', 'deferredRevenue': 'Deferred Revenue',
-        'otherCurrentLiabilities': 'Other Current Liabilities', 'totalCurrentLiabilities': 'Total Current Liabilities',
-        'longTermDebt': 'Long-term Debt', 'capitalLeaseObligations': 'Capital Lease Obligations',
-        'deferredTaxLiabilitiesNonCurrent': 'Deferred Tax Liabilities', 'otherNonCurrentLiabilities': 'Other Non-Current Liabilities',
-        'totalNonCurrentLiabilities': 'Total Non-Current Liabilities', 'totalLiabilities': 'Total Liabilities',
-        'commonStock': 'Common Stock', 'retainedEarnings': 'Retained Earnings',
-        'accumulatedOtherComprehensiveIncomeLoss': 'Accumulated Other Comprehensive Income',
-        'totalStockholdersEquity': 'Shareholders\' Equity', 'totalLiabilitiesAndTotalEquity': 'Total Liabilities & Equity',
-        'totalInvestments': 'Total Investments', 'totalDebt': 'Total Debt', 'netDebt': 'Net Debt'
+        'reportedCurrency': 'Currency', 'calendarYear': 'Year', 'period': 'Quarter',
+        'duplicate_period': 'Duplicate Period',
+        # Assets
+        'cashAndCashEquivalents': 'Cash & Cash Equivalents',
+        'shortTermInvestments': 'Short Term Investments',
+        'netReceivables': 'Receivables',
+        'inventory': 'Inventory',
+        'otherCurrentAssets': 'Other Current Assets',
+        'totalCurrentAssets': 'Total Current Assets',
+        'propertyPlantEquipmentNet': 'PP&E, Net',
+        'goodwill': 'Goodwill',
+        'intangibleAssets': 'Intangible Assets',
+        'longTermInvestments': 'Long Term Investments',
+        'taxAssets': 'Tax Assets',
+        'otherNonCurrentAssets': 'Other Non-Current Assets',
+        'totalNonCurrentAssets': 'Total Non-Current Assets',
+        'totalAssets': 'Total Assets',
+        # Liabilities
+        'accountPayables': 'Accounts Payable',
+        'shortTermDebt': 'Short Term Debt',
+        'taxPayables': 'Tax Payables',
+        'deferredRevenue': 'Deferred Revenue',
+        'otherCurrentLiabilities': 'Other Current Liabilities',
+        'totalCurrentLiabilities': 'Total Current Liabilities',
+        'longTermDebt': 'Long Term Debt',
+        'deferredRevenueNonCurrent': 'Deferred Revenue (Non-Current)',
+        'deferredTaxLiabilitiesNonCurrent': 'Deferred Tax (Non-Current)',
+        'otherNonCurrentLiabilities': 'Other Non-Current Liabilities',
+        'capitalLeaseObligations': 'Capital Lease Obligations',
+        'totalNonCurrentLiabilities': 'Total Non-Current Liabilities',
+        'totalLiabilities': 'Total Liabilities',
+        # Equity
+        'preferredStock': 'Preferred Stock',
+        'commonStock': 'Common Stock',
+        'retainedEarnings': 'Retained Earnings',
+        'accumulatedOtherComprehensiveIncomeLoss': 'AOCI',
+        'othertotalStockholdersEquity': 'Other Equity',
+        'minorityInterest': 'Minority Interest',
+        'totalStockholdersEquity': 'Total Stockholders Equity',
+        'totalLiabilitiesAndStockholdersEquity': 'Total Liabilities & Equity'
     }
 
-    df_work = df.copy().T
-    df_work = df_work.drop(['fillingDate', 'acceptedDate'], errors='ignore')
+    symbol = df.attrs.get('symbol', 'N/A')
+    period_type = df.attrs.get('period', 'N/A')
+    metadata = df.attrs.get('metadata', {})
+    company_name = metadata.get('companyName', symbol)
     
-    # Determine Scale based on Total Assets
-    total_assets_val = pd.to_numeric(df_work.loc['totalAssets', df_work.columns[0]], errors='coerce')
-    scale_factor = 1_000_000 if total_assets_val >= 1_000_000_000 else 1_000
+    df_work = df.copy()
+    
+    # MATCHING fmp_inctsFMT: Drop validation delta columns and metadata date
+    delta_cols = [col for col in df_work.columns if '_delta' in col or 'accounting_equation' in col]
+    df_work = df_work.drop(columns=delta_cols + ['fillingDate'], errors='ignore')
+    
+    df_work = df_work.T
+    
+    # Scale based on Total Assets
+    assets_val = pd.to_numeric(df_work.loc['totalAssets', df_work.columns[0]], errors='coerce')
+    scale_factor = 1_000_000 if assets_val >= 1_000_000_000 else 1_000
     scale_label = 'Millions' if scale_factor == 1_000_000 else 'Thousands'
 
-    # 1. ADD COMPOSITION (%) - Assets & Liabilities
-    if add_asset_composition:
-        comp_tags = [
-            'cashAndCashEquivalents', 'shortTermInvestments', 'netReceivables', 'inventory', 
-            'otherCurrentAssets', 'totalCurrentAssets', 'propertyPlantEquipmentNet', 
-            'goodwill', 'intangibleAssets', 'longTermInvestments', 'taxAssets', 
-            'otherNonCurrentAssets', 'totalNonCurrentAssets',
-            'accountPayables', 'deferredRevenue', 'totalDebt', 'retainedEarnings'
-        ]
-        
-        rows_to_insert = []
-        for tag in comp_tags:
-            if tag in df.columns:
-                pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
-                for col in df_work.columns:
-                    val = pd.to_numeric(df.loc[df.index[df.index.get_loc(col)], tag], errors='coerce')
-                    total = pd.to_numeric(df.loc[df.index[df.index.get_loc(col)], 'totalAssets'], errors='coerce')
-                    pct_row[col] = (val / total * 100) if total != 0 else np.nan
-                rows_to_insert.append((tag, pct_row))
-
-        for parent_tag, pct_row in reversed(rows_to_insert):
-            if parent_tag in df_work.index:
-                idx_pos = df_work.index.get_loc(parent_tag)
-                df_top = df_work.iloc[:idx_pos+1]
-                df_bottom = df_work.iloc[idx_pos+1:]
-                pct_row.name = f"% of Total Assets ({friendly_names.get(parent_tag, parent_tag)})"
-                df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
-
-    # 2. ADD RISK METRICS (Restored Working Capital and RE/TA)
-    if add_risk_metrics:
-        # Working Capital (Scaled)
-        wc = (pd.to_numeric(df['totalCurrentAssets']) - pd.to_numeric(df['totalCurrentLiabilities'])) / scale_factor
-        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(wc.values, index=df_work.columns, name='Working Capital')])])
-        
-        # TCE Ratio (%)
-        tce = ((pd.to_numeric(df['totalStockholdersEquity']) - pd.to_numeric(df['goodwill']) - pd.to_numeric(df['intangibleAssets'])) / pd.to_numeric(df['totalAssets'])) * 100
-        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(tce.values, index=df_work.columns, name='TCE Ratio (%)')])])
-
-        # RE/TA (%) - Retained Earnings / Total Assets
-        reta = (pd.to_numeric(df['retainedEarnings']) / pd.to_numeric(df['totalAssets'])) * 100
-        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(reta.values, index=df_work.columns, name='RE/TA (%)')])])
-
-    # 3. ADD RATIOS
-    if add_ratios:
-        curr_ratio = pd.to_numeric(df['totalCurrentAssets']) / pd.to_numeric(df['totalCurrentLiabilities'])
-        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(curr_ratio.values, index=df_work.columns, name='Current Ratio')])])
-        dte = pd.to_numeric(df['totalDebt']) / pd.to_numeric(df['totalStockholdersEquity'])
-        df_work = pd.concat([df_work, pd.DataFrame([pd.Series(dte.values, index=df_work.columns, name='Debt-to-Equity')])])
-
-    # Initial Scaling for main numeric rows
-    meta_rows = ['date', 'reportedCurrency', 'calendarYear', 'period']
-    for row in df_work.index:
-        if row not in meta_rows and "%" not in str(row) and "Ratio" not in str(row) and row != 'Working Capital':
+    # 1. ADD % OF TOTAL ROWS (Context-aware denominators)
+    asset_tags = ['cashAndCashEquivalents', 'shortTermInvestments', 'netReceivables', 'inventory', 
+                  'otherCurrentAssets', 'totalCurrentAssets', 'propertyPlantEquipmentNet', 
+                  'goodwill', 'intangibleAssets', 'longTermInvestments', 'taxAssets', 'otherNonCurrentAssets']
+    
+    le_tags = ['accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue', 
+               'otherCurrentLiabilities', 'totalCurrentLiabilities', 'longTermDebt', 
+               'deferredRevenueNonCurrent', 'deferredTaxLiabilitiesNonCurrent', 
+               'otherNonCurrentLiabilities', 'capitalLeaseObligations', 
+               'totalNonCurrentLiabilities', 'totalLiabilities', 'preferredStock', 
+               'commonStock', 'retainedEarnings', 'accumulatedOtherComprehensiveIncomeLoss', 
+               'othertotalStockholdersEquity', 'minorityInterest', 'totalStockholdersEquity']
+    
+    rows_to_insert = []
+    for tag in asset_tags + le_tags:
+        if tag in df_work.index:
+            denom_tag = 'totalAssets' if tag in asset_tags else 'totalLiabilitiesAndStockholdersEquity'
+            pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
             for col in df_work.columns:
-                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
-                if pd.notna(val) and row in friendly_names:
-                    df_work.loc[row, col] = val / scale_factor
+                val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                denom = pd.to_numeric(df_work.loc[denom_tag, col], errors='coerce')
+                pct_row[col] = (val / denom * 100) if denom and denom != 0 else np.nan
+            
+            denom_label = "Assets" if tag in asset_tags else "L&E"
+            rows_to_insert.append((tag, pct_row, denom_label))
 
-    # Apply UI Hierarchy
-    grand_totals = ['Total Assets', 'Total Liabilities & Equity', 'Total Debt', 'Net Debt']
-    subtotals = ['Total Current Assets', 'Total Non-Current Assets', 'Total Current Liabilities', 'Total Non-Current Liabilities', 'Total Liabilities', "Shareholders' Equity"]
+    for parent_tag, pct_row, d_label in reversed(rows_to_insert):
+        if parent_tag in df_work.index:
+            idx_pos = df_work.index.get_loc(parent_tag)
+            df_top = df_work.iloc[:idx_pos+1]
+            df_bottom = df_work.iloc[idx_pos+1:]
+            pct_row.name = f"% of Total {d_label} ({friendly_names.get(parent_tag, parent_tag)})"
+            df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
+
+    # 2. INITIAL SCALING
+    meta_rows = ['reportedCurrency', 'calendarYear', 'period', 'duplicate_period']
+    for row in df_work.index:
+        if row not in meta_rows and "%" not in str(row):
+            df_work.loc[row] = pd.to_numeric(df_work.loc[row], errors='coerce') / scale_factor
+
+    # 3. UI HIERARCHY STYLING
+    grand_totals = ['Total Assets', 'Total Liabilities', 'Total Stockholders Equity', 'Total Liabilities & Equity']
+    subtotals = ['Total Current Assets', 'Total Non-Current Assets', 'Total Current Liabilities', 'Total Non-Current Liabilities']
 
     def apply_styles(label):
         clean = friendly_names.get(label, label)
         if clean in grand_totals: return f"<strong>{clean}</strong>"
-        if clean in subtotals: return f"&nbsp;&nbsp;{clean}"
+        if clean in subtotals: return f"&nbsp;&nbsp;<strong>{clean}</strong>"
         if "%" in str(label): return f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<em>{label}</em>"
         return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
 
     df_work.index = [apply_styles(idx) for idx in df_work.index]
 
-    # Cell Value Formatting
+    # 4. CELL VALUE FORMATTING
     for idx in df_work.index:
         for col in df_work.columns:
             val = df_work.loc[idx, col]
             if isinstance(val, (int, float)) and pd.notna(val):
-                fmt = "{:.2f}" if ("%" in str(idx) or "Ratio" in str(idx)) else "{:,.2f}"
+                fmt = "{:.2f}" if "%" in str(idx) else "{:,.2f}"
                 df_work.loc[idx, col] = fmt.format(val)
 
-    # HTML Output with Charting Logic
+    df_work.columns = [pd.to_datetime(col).strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(col, errors='coerce')) else str(col) for col in df_work.columns]
     table_html = df_work.to_html(classes='balance-sheet', border=0, escape=False)
+    
+    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"{symbol}_balance_sheet_{timestamp}.html"
     
     styled_html = f"""
 <!DOCTYPE html>
 <html>
 <head>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         body {{ font-family: -apple-system, system-ui, sans-serif; padding: 40px; background-color: #f0f2f5; }}
         .container {{ background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
-        h2 {{ color: #1a1a1a; border-bottom: 3px solid #4CAF50; padding-bottom: 15px; margin-bottom: 20px; }}
-        .balance-sheet {{ border-collapse: collapse; width: 100%; font-size: 13px; color: #333; }}
-        .balance-sheet thead th {{ background-color: #4CAF50; color: white; padding: 12px 10px; text-align: right; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }}
-        .balance-sheet tbody th {{ text-align: left !important; padding: 8px 15px; border: 1px solid #e0e0e0; border-right: 2px solid #ccc; white-space: nowrap; cursor: pointer; font-family: "SF Mono", monospace; background-color: #fff; }}
-        .balance-sheet tbody th:hover {{ background-color: #e8f5e9; color: #2e7d32; }}
+        .metadata {{ color: #666; font-size: 14px; margin-bottom: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 6px; }}
+        .controls {{ margin-bottom: 20px; padding: 15px; background-color: #e8f5e9; border-radius: 6px; display: flex; gap: 10px; }}
+        .btn {{ padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; }}
+        .btn-primary {{ background-color: #2E7D32; color: white; }}
+        .btn-success {{ background-color: #1976D2; color: white; }}
+        h2 {{ color: #1a1a1a; border-bottom: 3px solid #2E7D32; padding-bottom: 15px; }}
+        .balance-sheet {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
+        .balance-sheet thead th {{ background-color: #2E7D32; color: white; padding: 12px 10px; text-align: right; }}
+        .balance-sheet tbody th {{ text-align: left !important; padding: 8px 15px; border: 1px solid #e0e0e0; cursor: pointer; font-family: "SF Mono", monospace; background-color: #fff; }}
+        .balance-sheet tbody th:hover {{ background-color: #e8f5e9; color: #2E7D32; }}
         .balance-sheet tbody td {{ border: 1px solid #e0e0e0; padding: 8px; text-align: right; }}
         .balance-sheet tbody tr:nth-child(even) {{ background-color: #fafafa; }}
-        strong {{ font-weight: 800 !important; color: #000; }}
-        em {{ color: #777; font-size: 0.85em; }}
         #chartModal {{ display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); }}
         .modal-content {{ background: white; margin: 5% auto; padding: 20px; border-radius: 12px; width: 80%; max-width: 900px; }}
-        .close {{ color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }}
     </style>
 </head>
 <body>
-    <div class="container"><h2>Balance Sheet (in {scale_label})</h2><div style="overflow-x: auto;">{table_html}</div></div>
-    <div id="chartModal"><div class="modal-content"><span class="close" onclick="closeModal()">&times;</span><canvas id="rowChart"></canvas></div></div>
+    <div class="container">
+        <div class="metadata">
+            <strong>Company:</strong> {company_name} ({symbol}) &nbsp;&nbsp;|&nbsp;&nbsp; <strong>Period:</strong> {period_type.upper()}
+        </div>
+        <div class="controls">
+            <button class="btn btn-primary" id="pctToggle" onclick="togglePercentages()">Show % of Total</button>
+            <button class="btn btn-success" onclick="exportToExcel()">Export to Excel</button>
+        </div>
+        <h2>Balance Sheet (in {scale_label})</h2>
+        <div style="overflow-x: auto;">{table_html}</div>
+    </div>
+    <div id="chartModal"><div class="modal-content"><span style="cursor:pointer;float:right;font-size:24px;" onclick="closeModal()">&times;</span><canvas id="rowChart"></canvas></div></div>
     <script>
+        let pctVisible = false;
+        function togglePercentages() {{
+            pctVisible = !pctVisible;
+            document.querySelectorAll('.balance-sheet tbody tr').forEach(row => {{
+                if (row.querySelector('th') && row.querySelector('th').innerHTML.includes('% of Total')) {{
+                    row.style.display = pctVisible ? 'table-row' : 'none';
+                }}
+            }});
+            document.getElementById('pctToggle').textContent = pctVisible ? 'Hide % of Total' : 'Show % of Total';
+        }}
+        
+        // Initial state
+        document.querySelectorAll('.balance-sheet tbody tr').forEach(row => {{
+            if (row.querySelector('th') && row.querySelector('th').innerHTML.includes('% of Total')) row.style.display = 'none';
+        }});
+
+        function exportToExcel() {{
+            const table = document.querySelector('.balance-sheet');
+            const rows = Array.from(table.querySelectorAll('tr')).filter(r => r.style.display !== 'none');
+            const data = rows.map(r => Array.from(r.querySelectorAll('th, td')).map(c => {{
+                const text = (c.innerText || c.textContent).replace(/,/g, '');
+                return isNaN(parseFloat(text)) ? text : parseFloat(text);
+            }}));
+            const ws = XLSX.utils.aoa_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Balance Sheet");
+            XLSX.writeFile(wb, "{symbol}_balance_sheet.xlsx");
+        }}
+
         let myChart = null;
         document.querySelectorAll(".balance-sheet tbody th").forEach(header => {{
             header.onclick = function() {{
@@ -784,7 +954,8 @@ def fmp_baltsFmt(df, add_ratios=False, add_asset_composition=False, add_risk_met
                 document.getElementById("chartModal").style.display = "block";
                 if (myChart) myChart.destroy();
                 myChart = new Chart(document.getElementById('rowChart'), {{
-                    type: 'line', data: {{ labels, datasets: [{{ label, data, borderColor: '#4CAF50', backgroundColor: 'rgba(76,175,80,0.1)', fill: true, tension: 0.3 }}] }}
+                    type: 'line', 
+                    data: {{ labels, datasets: [{{ label, data, borderColor: '#2E7D32', backgroundColor: 'rgba(46,125,50,0.1)', fill: true, tension: 0.3 }}] }}
                 }});
             }};
         }});
@@ -795,7 +966,7 @@ def fmp_baltsFmt(df, add_ratios=False, add_asset_composition=False, add_risk_met
 """
     with open(filename, 'w', encoding='utf-8') as f: f.write(styled_html)
     webbrowser.open('file://' + os.path.abspath(filename))
-
+    print(f"Saved to: {filename}")
 #----------------------------------------------------------------------------
 #MOD  011826 4:41 PM
 def fmp_baltsC(sym, facs=None, period='quarter', limit=400,
