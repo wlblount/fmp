@@ -1702,7 +1702,7 @@ def df_to_markdown_with_metadata(df, filename):
     print(f"Saved to {filename}")
 #-----------------------------------------------------	
 #MOD 2/8/26 9:41AM
-def fmp_inctsFMT(df):
+def fmp_inctsFmt(df):
     r"""
     Formats a fmp_incts() DataFrame into an interactive HTML report.
 
@@ -2495,6 +2495,337 @@ def fmp_cashfts(sym, facs=None, period='quarter', limit=400, save_md=None):
     except Exception as e:
         print(f"Error in fmp_cashfts for {sym}: {e}")
         return pd.DataFrame()
+#-----------------------------------------------------	
+#MOD 2/10/26 7:57AM
+def fmp_cashftsFmt(df):
+    r"""
+    Formats a fmp_cashfts() DataFrame into an interactive HTML report.
+
+    This function transforms cash flow statement data into a professional HTML document with
+    automatic scaling, financial hierarchy styling, and Chart.js for interactive row-level trend analysis.
+
+    Args:
+        df (pd.DataFrame): Cash flow statement data from fmp_cashfts() (date index, metrics as columns).
+
+    Returns:
+        None: Writes file to disk and opens it in the default web browser.
+
+    Notes:
+        ### Interactive Controls
+        - Export to Excel button downloads the visible data as Excel file
+        
+        ### Scaling Logic
+        The function determines the scale based on the first period's 'operatingCashFlow':
+        - If Operating Cash Flow ≥ 1,000,000,000, values are divided by 1,000,000 (Millions).
+        - Otherwise, values are divided by 1,000 (Thousands).
+        
+        ### Company Metadata
+        Displays symbol, period, and company name from df.attrs if available.
+    """
+    friendly_names = {
+        'reportedCurrency': 'Currency', 
+        'calendarYear': 'Year', 
+        'period': 'Quarter',
+        'duplicate_period': 'Duplicate Period',
+        # Operating Activities
+        'netIncome': 'Net Income',
+        'depreciationAndAmortization': 'Depreciation & Amortization',
+        'deferredIncomeTax': 'Deferred Income Tax',
+        'stockBasedCompensation': 'Stock-Based Compensation',
+        'changeInWorkingCapital': 'Change in Working Capital',
+        'accountsReceivables': 'Accounts Receivable',
+        'inventory': 'Inventory',
+        'accountsPayables': 'Accounts Payable',
+        'otherWorkingCapital': 'Other Working Capital',
+        'otherNonCashItems': 'Other Non-Cash Items',
+        'netCashProvidedByOperatingActivities': 'Net Cash from Operating Activities',
+        'operatingCashFlow': 'Operating Cash Flow',
+        # Investing Activities
+        'investmentsInPropertyPlantAndEquipment': 'Capital Expenditures',
+        'capitalExpenditure': 'Capital Expenditures',  # Same as above, won't duplicate in display
+        'acquisitionsNet': 'Acquisitions, Net',
+        'purchasesOfInvestments': 'Purchases of Investments',
+        'salesMaturitiesOfInvestments': 'Sales/Maturities of Investments',
+        'otherInvestingActivites': 'Other Investing Activities',
+        'netCashUsedForInvestingActivites': 'Net Cash from Investing Activities',
+        # Financing Activities
+        'debtRepayment': 'Debt Repayment',
+        'commonStockIssued': 'Common Stock Issued',
+        'commonStockRepurchased': 'Common Stock Repurchased',
+        'dividendsPaid': 'Dividends Paid',
+        'otherFinancingActivites': 'Other Financing Activities',
+        'netCashUsedProvidedByFinancingActivities': 'Net Cash from Financing Activities',
+        # Cash Reconciliation
+        'effectOfForexChangesOnCash': 'Effect of FX Changes on Cash',
+        'netChangeInCash': 'Net Change in Cash',
+        'cashAtBeginningOfPeriod': 'Cash at Beginning of Period',
+        'cashAtEndOfPeriod': 'Cash at End of Period',
+        # Derived Metrics
+        'freeCashFlow': 'Free Cash Flow',
+        'fillingDate': 'Filing Date'
+    }
+
+    # Extract metadata for header
+    symbol = df.attrs.get('symbol', 'N/A')
+    period_type = df.attrs.get('period', 'N/A')
+    metadata = df.attrs.get('metadata', {})
+    company_name = metadata.get('companyName', symbol)
+    
+    df_work = df.copy()
+    
+    # Drop validation delta columns
+    delta_cols = [col for col in df_work.columns if '_delta_rpt_vs_calc' in col]
+    df_work = df_work.drop(columns=delta_cols, errors='ignore')
+    
+    # Drop duplicate_period and fillingDate if present
+    df_work = df_work.drop(columns=['duplicate_period', 'fillingDate'], errors='ignore')
+    
+    # Transpose so dates are columns
+    df_work = df_work.T
+    
+    # Determine Scale based on Operating Cash Flow
+    ocf_val = pd.to_numeric(df_work.loc['operatingCashFlow', df_work.columns[0]], errors='coerce')
+    scale_factor = 1_000_000 if abs(ocf_val) >= 1_000_000_000 else 1_000
+    scale_label = 'Millions' if scale_factor == 1_000_000 else 'Thousands'
+
+    # Initial Scaling for main numeric rows (exclude metadata)
+    meta_rows = ['reportedCurrency', 'calendarYear', 'period']
+    for row in df_work.index:
+        if row not in meta_rows:
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
+                if pd.notna(val):
+                    df_work.loc[row, col] = val / scale_factor
+
+    # Define section ordering
+    section_order = [
+        'reportedCurrency', 'calendarYear', 'period',
+        # Operating Activities Section
+        'netIncome',
+        'depreciationAndAmortization',
+        'deferredIncomeTax',
+        'stockBasedCompensation',
+        'changeInWorkingCapital',
+        'accountsReceivables',
+        'inventory',
+        'accountsPayables',
+        'otherWorkingCapital',
+        'otherNonCashItems',
+        'netCashProvidedByOperatingActivities',
+        'operatingCashFlow',
+        'spacer1',  # Visual separator
+        # Investing Activities Section
+        'investmentsInPropertyPlantAndEquipment',  # This IS capital expenditure
+        'acquisitionsNet',
+        'purchasesOfInvestments',
+        'salesMaturitiesOfInvestments',
+        'otherInvestingActivites',
+        'netCashUsedForInvestingActivites',
+        'spacer2',  # Visual separator
+        # Financing Activities Section
+        'debtRepayment',
+        'commonStockIssued',
+        'commonStockRepurchased',
+        'dividendsPaid',
+        'otherFinancingActivites',
+        'netCashUsedProvidedByFinancingActivities',
+        'spacer3',  # Visual separator
+        # Cash Reconciliation Section
+        'effectOfForexChangesOnCash',
+        'netChangeInCash',
+        'cashAtBeginningOfPeriod',
+        'cashAtEndOfPeriod',
+        'spacer4',  # Visual separator
+        # Derived Metrics
+        'freeCashFlow'
+    ]
+    
+    # Reorder rows based on section_order (only include rows that exist)
+    existing_rows = [row for row in section_order if row in df_work.index or row.startswith('spacer')]
+    
+    # Create spacer rows with empty data
+    for spacer in ['spacer1', 'spacer2', 'spacer3', 'spacer4']:
+        if spacer in existing_rows:
+            spacer_row = pd.Series(index=df_work.columns, name=spacer, dtype=object)
+            spacer_row[:] = ''
+            df_work = pd.concat([df_work, pd.DataFrame([spacer_row])])
+    
+    df_work = df_work.reindex(existing_rows)
+
+    # Apply UI Hierarchy
+    grand_totals = [
+        'Operating Cash Flow',
+        'Net Cash from Operating Activities', 
+        'Net Cash from Investing Activities',
+        'Net Cash from Financing Activities',
+        'Net Change in Cash',
+        'Free Cash Flow'
+    ]
+    
+    subtotals = [
+        'Net Income',
+        'Capital Expenditures',
+        'Dividends Paid',
+        'Cash at Beginning of Period',
+        'Cash at End of Period'
+    ]
+
+    def apply_styles(label):
+        if label.startswith('spacer'):
+            return ''  # Empty row for spacing
+        
+        clean = friendly_names.get(label, label)
+        
+        if clean in grand_totals: 
+            return f"<strong>{clean}</strong>"
+        if clean in subtotals: 
+            return f"&nbsp;&nbsp;{clean}"
+        return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
+
+    df_work.index = [apply_styles(idx) for idx in df_work.index]
+
+    # Cell Value Formatting
+    for idx in df_work.index:
+        if idx == '':  # Skip spacer rows
+            continue
+        for col in df_work.columns:
+            val = df_work.loc[idx, col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                fmt = "{:,.2f}"
+                df_work.loc[idx, col] = fmt.format(val)
+
+    # Format column headers (dates)
+    df_work.columns = [pd.to_datetime(col).strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(col, errors='coerce')) else str(col) for col in df_work.columns]
+
+    # HTML Output with Charting Logic
+    table_html = df_work.to_html(classes='cash-flow-statement', border=0, escape=False)
+    
+    # Generate unique filename based on symbol and timestamp
+    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"{symbol}_cash_flow_{timestamp}.html"
+    
+    styled_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        body {{ font-family: -apple-system, system-ui, sans-serif; padding: 40px; background-color: #f0f2f5; }}
+        .container {{ background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+        .metadata {{ color: #666; font-size: 14px; margin-bottom: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 6px; }}
+        .metadata strong {{ color: #1a1a1a; }}
+        .controls {{ margin-bottom: 20px; padding: 15px; background-color: #e3f2fd; border-radius: 6px; display: flex; gap: 10px; }}
+        .btn {{ padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; }}
+        .btn-success {{ background-color: #4CAF50; color: white; }}
+        .btn-success:hover {{ background-color: #45a049; }}
+        h2 {{ color: #1a1a1a; border-bottom: 3px solid #4CAF50; padding-bottom: 15px; margin-bottom: 20px; }}
+        .cash-flow-statement {{ border-collapse: collapse; width: 100%; font-size: 13px; color: #333; }}
+        .cash-flow-statement thead th {{ background-color: #4CAF50; color: white; padding: 12px 10px; text-align: right; text-transform: uppercase; letter-spacing: 1px; font-size: 11px; }}
+        .cash-flow-statement tbody th {{ text-align: left !important; padding: 8px 15px; border: 1px solid #e0e0e0; border-right: 2px solid #ccc; white-space: nowrap; cursor: pointer; font-family: "SF Mono", monospace; background-color: #fff; }}
+        .cash-flow-statement tbody th:hover {{ background-color: #e8f5e9; color: #2e7d32; }}
+        .cash-flow-statement tbody th:empty {{ cursor: default; background-color: transparent; border: none; }}
+        .cash-flow-statement tbody td {{ border: 1px solid #e0e0e0; padding: 8px; text-align: right; }}
+        .cash-flow-statement tbody tr:nth-child(even) {{ background-color: #fafafa; }}
+        .cash-flow-statement tbody tr:has(th:empty) {{ background-color: transparent; height: 10px; }}
+        .cash-flow-statement tbody tr:has(th:empty) td {{ border: none; background-color: transparent; }}
+        strong {{ font-weight: 800 !important; color: #000; }}
+        #chartModal {{ display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); }}
+        .modal-content {{ background: white; margin: 5% auto; padding: 20px; border-radius: 12px; width: 80%; max-width: 900px; }}
+        .close {{ color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="metadata">
+            <strong>Company:</strong> {company_name} ({symbol}) &nbsp;&nbsp;|&nbsp;&nbsp;
+            <strong>Period:</strong> {period_type.upper()}
+        </div>
+        <div class="controls">
+            <button class="btn btn-success" onclick="exportToExcel()">Export to Excel</button>
+        </div>
+        <h2>Cash Flow Statement (in {scale_label})</h2>
+        <div style="overflow-x: auto;">{table_html}</div>
+    </div>
+    <div id="chartModal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <canvas id="rowChart"></canvas>
+        </div>
+    </div>
+    <script>
+        function exportToExcel() {{
+            const table = document.querySelector('.cash-flow-statement');
+            const rows = Array.from(table.querySelectorAll('tr')).filter(row => {{
+                // Exclude spacer rows (empty th)
+                const th = row.querySelector('th');
+                return !th || th.innerHTML.trim() !== '';
+            }});
+            
+            const data = rows.map(row => {{
+                return Array.from(row.querySelectorAll('th, td')).map(cell => {{
+                    // Clean HTML tags and get text
+                    const text = cell.innerText || cell.textContent;
+                    // Try to convert to number if it looks like one
+                    const cleaned = text.replace(/,/g, '');
+                    const num = parseFloat(cleaned);
+                    return isNaN(num) ? text : num;
+                }});
+            }});
+            
+            const ws = XLSX.utils.aoa_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Cash Flow Statement");
+            XLSX.writeFile(wb, "{symbol}_cash_flow.xlsx");
+        }}
+        
+        let myChart = null;
+        document.querySelectorAll(".cash-flow-statement tbody th").forEach(header => {{
+            // Skip empty headers (spacer rows)
+            if (header.innerHTML.trim() === '') return;
+            
+            header.onclick = function() {{
+                const row = this.parentElement;
+                const label = this.innerText.trim();
+                const labels = Array.from(document.querySelectorAll(".cash-flow-statement thead th")).slice(1).map(th => th.innerText);
+                const data = Array.from(row.querySelectorAll("td")).map(td => parseFloat(td.innerText.replace(/,/g, '')));
+                document.getElementById("chartModal").style.display = "block";
+                if (myChart) myChart.destroy();
+                myChart = new Chart(document.getElementById('rowChart'), {{
+                    type: 'line', 
+                    data: {{ 
+                        labels, 
+                        datasets: [{{ 
+                            label, 
+                            data, 
+                            borderColor: '#4CAF50', 
+                            backgroundColor: 'rgba(76,175,80,0.1)', 
+                            fill: true, 
+                            tension: 0.3 
+                        }}] 
+                    }},
+                    options: {{
+                        responsive: true,
+                        plugins: {{
+                            title: {{
+                                display: true,
+                                text: label
+                            }}
+                        }}
+                    }}
+                }});
+            }};
+        }});
+        function closeModal() {{ document.getElementById("chartModal").style.display = "none"; }}
+    </script>
+</body>
+</html>
+"""
+    with open(filename, 'w', encoding='utf-8') as f: 
+        f.write(styled_html)
+    webbrowser.open('file://' + os.path.abspath(filename))
+    print(f"Saved to: {filename}")
+#-----------------------------------------------------------------
 #-----------------------------------------------------
 # 2026-01-18 07:55:35
 def fmp_cashftsar(sym, facs=None, period='quarter', limit=400):
@@ -2541,6 +2872,1777 @@ def fmp_cashftsar(sym, facs=None, period='quarter', limit=400):
     except Exception as e:
         print(f"Error in fmp_cashftsar for {sym}: {e}")
         return pd.DataFrame()
+
+#----------------------------------------------------------
+#-----------------------------------------------------	
+#MOD 2/10/26 9:05AM
+def fmp_finf(sym, period='quarter', limit=8, save_md=None):
+    """
+    Fetches all three financial statements (Balance Sheet, Income Statement, Cash Flow).
+    
+    Parameters:
+    -----------
+    sym : str
+        The stock ticker symbol (e.g., 'AAPL').
+    
+    period : str, default='quarter'
+        The reporting period to retrieve:
+        - 'quarter' : Quarterly financial statements (default)
+        - 'annual'  : Annual financial statements (FY only)
+        - 'ttm'     : Trailing Twelve Months (rolling 4-quarter sum)
+    
+    limit : int, default=8
+        Maximum number of periods to retrieve from FMP.
+        For 'ttm': Returns approximately `limit - 3` TTM periods.
+    
+    save_md : str, optional
+        Filepath to save all three statements with metadata as markdown file.
+        Example: save_md='apple_financials.md'
+    
+    Returns:
+    --------
+    dict: Dictionary containing:
+        - 'balance_sheet': DataFrame from fmp_balts()
+        - 'income_statement': DataFrame from fmp_incts()
+        - 'cash_flow': DataFrame from fmp_cashfts()
+        - 'metadata': Company metadata dict
+        - 'symbol': Stock symbol
+        - 'period': Period type ('quarter', 'annual', or 'ttm')
+    
+    Examples:
+    ---------
+    >>> # Get last 8 quarters of all statements
+    >>> financials = fmp_financials('AAPL', period='quarter', limit=8)
+    >>> 
+    >>> # Access individual statements
+    >>> balance_sheet = financials['balance_sheet']
+    >>> income_statement = financials['income_statement']
+    >>> cash_flow = financials['cash_flow']
+    >>> 
+    >>> # Access metadata
+    >>> print(financials['metadata']['companyName'])
+    >>> 
+    >>> # Get last 5 years annual
+    >>> financials = fmp_financials('AAPL', period='annual', limit=5)
+    """
+    
+    sym = sym.upper().strip()
+    
+    # Validate limit for TTM
+    if period.lower() == 'ttm' and limit < 4:
+        raise ValueError(
+            f"TTM period requires limit >= 4 to calculate rolling 4-quarter sums. "
+            f"You provided limit={limit}. Use limit=4 for 1 TTM period, or limit=8 for 5 TTM periods."
+        )
+    
+    print(f"Fetching financial statements for {sym}...")
+    
+    print(f"Fetching financial statements for {sym}...")
+    
+    # Fetch all three statements
+    print("  → Balance Sheet...")
+    balance_sheet = fmp_balts(sym, period=period, limit=limit)
+    
+    print("  → Income Statement...")
+    income_statement = fmp_incts(sym, period=period, limit=limit)
+    
+    print("  → Cash Flow Statement...")
+    cash_flow = fmp_cashfts(sym, period=period, limit=limit)
+    
+    # Check if all fetches were successful
+    if balance_sheet.empty or income_statement.empty or cash_flow.empty:
+        print(f"Warning: One or more statements could not be fetched for {sym}")
+        return None
+    
+    # Extract metadata (should be same across all statements)
+    metadata = balance_sheet.attrs.get('metadata', {})
+    
+    # Build result dictionary
+    result = {
+        'balance_sheet': balance_sheet,
+        'income_statement': income_statement,
+        'cash_flow': cash_flow,
+        'metadata': metadata,
+        'symbol': sym,
+        'period': period.lower()
+    }
+    
+    # Optional: Save to markdown if requested
+    if save_md:
+        with open(save_md, 'w', encoding='utf-8') as f:
+            f.write(f"# Financial Statements: {metadata.get('companyName', sym)} ({sym})\n\n")
+            f.write(f"**Period:** {period.upper()}\n\n")
+            f.write(f"**Company Info:**\n")
+            for key, value in metadata.items():
+                if value:
+                    f.write(f"- {key}: {value}\n")
+            f.write("\n---\n\n")
+            
+            f.write("## Balance Sheet\n\n")
+            f.write(balance_sheet.to_markdown())
+            f.write("\n\n---\n\n")
+            
+            f.write("## Income Statement\n\n")
+            f.write(income_statement.to_markdown())
+            f.write("\n\n---\n\n")
+            
+            f.write("## Cash Flow Statement\n\n")
+            f.write(cash_flow.to_markdown())
+        
+        print(f"Saved markdown to: {save_md}")
+    
+    print(f"✓ Complete: Fetched {len(balance_sheet)} periods")
+    
+    return result
+#-----------------------------------------------------
+
+#-----------------------------------------------------	
+# HELPER FUNCTIONS FOR HTML GENERATION
+def _generate_balance_sheet_html(df, symbol, period_type, metadata):
+    """Generates fully formatted Balance Sheet HTML content WITH percentages and toggle."""
+    
+    friendly_names = {
+        'reportedCurrency': 'Currency', 
+        'calendarYear': 'Year', 
+        'period': 'Quarter',
+        'duplicate_period': 'Duplicate Period',
+        # Assets
+        'cashAndCashEquivalents': 'Cash & Cash Equivalents',
+        'shortTermInvestments': 'Short-Term Investments',
+        'cashAndShortTermInvestments': 'Cash & Short-Term Investments',
+        'netReceivables': 'Net Receivables',
+        'inventory': 'Inventory',
+        'otherCurrentAssets': 'Other Current Assets',
+        'totalCurrentAssets': 'Total Current Assets',
+        'propertyPlantEquipmentNet': 'Property, Plant & Equipment (Net)',
+        'goodwill': 'Goodwill',
+        'intangibleAssets': 'Intangible Assets',
+        'goodwillAndIntangibleAssets': 'Goodwill & Intangible Assets',
+        'longTermInvestments': 'Long-Term Investments',
+        'taxAssets': 'Tax Assets',
+        'otherNonCurrentAssets': 'Other Non-Current Assets',
+        'totalNonCurrentAssets': 'Total Non-Current Assets',
+        'otherAssets': 'Other Assets',
+        'totalAssets': 'Total Assets',
+        # Liabilities
+        'accountPayables': 'Accounts Payable',
+        'shortTermDebt': 'Short-Term Debt',
+        'taxPayables': 'Tax Payables',
+        'deferredRevenue': 'Deferred Revenue',
+        'otherCurrentLiabilities': 'Other Current Liabilities',
+        'totalCurrentLiabilities': 'Total Current Liabilities',
+        'longTermDebt': 'Long-Term Debt',
+        'deferredRevenueNonCurrent': 'Deferred Revenue (Non-Current)',
+        'deferredTaxLiabilitiesNonCurrent': 'Deferred Tax Liabilities (Non-Current)',
+        'otherNonCurrentLiabilities': 'Other Non-Current Liabilities',
+        'totalNonCurrentLiabilities': 'Total Non-Current Liabilities',
+        'otherLiabilities': 'Other Liabilities',
+        'capitalLeaseObligations': 'Capital Lease Obligations',
+        'totalLiabilities': 'Total Liabilities',
+        # Equity
+        'preferredStock': 'Preferred Stock',
+        'commonStock': 'Common Stock',
+        'retainedEarnings': 'Retained Earnings',
+        'accumulatedOtherComprehensiveIncomeLoss': 'Accumulated Other Comprehensive Income/Loss',
+        'othertotalStockholdersEquity': 'Other Stockholders Equity',
+        'totalStockholdersEquity': 'Total Stockholders Equity',
+        'totalEquity': 'Total Equity',
+        'totalLiabilitiesAndStockholdersEquity': 'Total Liabilities & Stockholders Equity',
+        'minorityInterest': 'Minority Interest',
+        'totalLiabilitiesAndTotalEquity': 'Total Liabilities & Total Equity',
+        'totalInvestments': 'Total Investments',
+        'totalDebt': 'Total Debt',
+        'netDebt': 'Net Debt',
+        'fillingDate': 'Filing Date'
+    }
+    
+    df_work = df.copy()
+    
+    # Drop validation delta columns and metadata
+    delta_cols = [col for col in df_work.columns if '_delta_rpt_vs_calc' in col]
+    df_work = df_work.drop(columns=delta_cols, errors='ignore')
+    df_work = df_work.drop(columns=['duplicate_period', 'fillingDate'], errors='ignore')
+    
+    # Transpose so dates are columns
+    df_work = df_work.T
+    
+    # Determine Scale based on Total Assets
+    total_assets_val = pd.to_numeric(df_work.loc['totalAssets', df_work.columns[0]], errors='coerce')
+    scale_factor = 1_000_000 if total_assets_val >= 1_000_000_000 else 1_000
+    scale_label = 'Millions' if scale_factor == 1_000_000 else 'Thousands'
+    
+    # Add % of Total Assets for asset items
+    asset_pct_tags = [
+        'cashAndCashEquivalents', 'shortTermInvestments', 'cashAndShortTermInvestments',
+        'netReceivables', 'inventory', 'otherCurrentAssets', 'totalCurrentAssets',
+        'propertyPlantEquipmentNet', 'goodwill', 'intangibleAssets', 
+        'goodwillAndIntangibleAssets', 'longTermInvestments', 'taxAssets',
+        'otherNonCurrentAssets', 'totalNonCurrentAssets', 'otherAssets'
+    ]
+    
+    # Add % of Total Liabilities for liability items
+    liability_pct_tags = [
+        'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue',
+        'otherCurrentLiabilities', 'totalCurrentLiabilities', 'longTermDebt',
+        'deferredRevenueNonCurrent', 'deferredTaxLiabilitiesNonCurrent',
+        'otherNonCurrentLiabilities', 'totalNonCurrentLiabilities', 'otherLiabilities'
+    ]
+    
+    # Add % of Total Equity for equity items
+    equity_pct_tags = [
+        'preferredStock', 'commonStock', 'retainedEarnings',
+        'accumulatedOtherComprehensiveIncomeLoss', 'othertotalStockholdersEquity',
+        'totalStockholdersEquity', 'totalEquity'
+    ]
+    
+    rows_to_insert = []
+    
+    # Calculate % of Total Assets
+    for tag in asset_pct_tags:
+        if tag in df_work.index and 'totalAssets' in df_work.index:
+            pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                total_assets = pd.to_numeric(df_work.loc['totalAssets', col], errors='coerce')
+                pct_row[col] = (val / total_assets * 100) if total_assets != 0 else np.nan
+            rows_to_insert.append((tag, pct_row, '% of Total Assets'))
+    
+    # Calculate % of Total Liabilities
+    for tag in liability_pct_tags:
+        if tag in df_work.index and 'totalLiabilities' in df_work.index:
+            pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                total_liab = pd.to_numeric(df_work.loc['totalLiabilities', col], errors='coerce')
+                pct_row[col] = (val / total_liab * 100) if total_liab != 0 else np.nan
+            rows_to_insert.append((tag, pct_row, '% of Total Liabilities'))
+    
+    # Calculate % of Total Equity
+    for tag in equity_pct_tags:
+        if tag in df_work.index:
+            # Use totalEquity if available, otherwise totalStockholdersEquity
+            equity_tag = 'totalEquity' if 'totalEquity' in df_work.index else 'totalStockholdersEquity'
+            if equity_tag in df_work.index:
+                pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+                for col in df_work.columns:
+                    val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                    total_equity = pd.to_numeric(df_work.loc[equity_tag, col], errors='coerce')
+                    pct_row[col] = (val / total_equity * 100) if total_equity != 0 else np.nan
+                rows_to_insert.append((tag, pct_row, '% of Total Equity'))
+    
+    # Insert percentage rows
+    for parent_tag, pct_row, pct_label in reversed(rows_to_insert):
+        if parent_tag in df_work.index:
+            idx_pos = df_work.index.get_loc(parent_tag)
+            df_top = df_work.iloc[:idx_pos+1]
+            df_bottom = df_work.iloc[idx_pos+1:]
+            pct_row.name = f"{pct_label} ({friendly_names.get(parent_tag, parent_tag)})"
+            df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
+    
+    # Initial Scaling for main numeric rows
+    meta_rows = ['reportedCurrency', 'calendarYear', 'period']
+    for row in df_work.index:
+        if row not in meta_rows and "%" not in str(row):
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
+                if pd.notna(val):
+                    df_work.loc[row, col] = val / scale_factor
+    
+    # Apply UI Hierarchy
+    grand_totals = [
+        'Total Current Assets',
+        'Total Non-Current Assets',
+        'Total Assets',
+        'Total Current Liabilities',
+        'Total Non-Current Liabilities',
+        'Total Liabilities',
+        'Total Stockholders Equity',
+        'Total Equity',
+        'Total Liabilities & Stockholders Equity',
+        'Total Liabilities & Total Equity'
+    ]
+    
+    subtotals = [
+        'Cash & Short-Term Investments',
+        'Goodwill & Intangible Assets',
+        'Total Debt',
+        'Net Debt'
+    ]
+    
+    def apply_styles(label):
+        clean = friendly_names.get(label, label)
+        
+        if clean in grand_totals:
+            return f"<strong>{clean}</strong>"
+        if clean in subtotals:
+            return f"&nbsp;&nbsp;{clean}"
+        if "%" in str(label):
+            return f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<em>{label}</em>"
+        return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
+    
+    df_work.index = [apply_styles(idx) for idx in df_work.index]
+    
+    # Cell Value Formatting
+    for idx in df_work.index:
+        for col in df_work.columns:
+            val = df_work.loc[idx, col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                if "%" in str(idx):
+                    fmt = "{:.2f}"
+                else:
+                    fmt = "{:,.2f}"
+                df_work.loc[idx, col] = fmt.format(val)
+    
+    # Format column headers (dates)
+    df_work.columns = [pd.to_datetime(col).strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(col, errors='coerce')) else str(col) for col in df_work.columns]
+    
+    # Generate table HTML with pct-row class
+    header = '<thead><tr><th></th>'
+    for col in df_work.columns:
+        header += f'<th>{col}</th>'
+    header += '</tr></thead>'
+    
+    body = '<tbody>'
+    for idx in df_work.index:
+        # Check if this is a percentage row OR a spacer row
+        if idx == '':
+            body += f'<tr><th></th>'
+            for col in df_work.columns:
+                body += '<td></td>'
+            body += '</tr>'
+        else:
+            row_class = ' class="pct-row"' if '% of Total' in str(idx) else ''
+            body += f'<tr{row_class}><th>{idx}</th>'
+            for col in df_work.columns:
+                body += f'<td>{df_work.loc[idx, col]}</td>'
+            body += '</tr>'
+    body += '</tbody>'
+    
+    table_html = f'<table class="balance-sheet-table" border="0">{header}{body}</table>'
+    
+    html = f"""
+    <div class="controls">
+        <button class="btn btn-primary" id="bsPctToggle" onclick="toggleBalanceSheetPercentages()">Show Percentages</button>
+        <button class="btn btn-success" onclick="exportToExcel()">Export All to Excel</button>
+        <span style="margin-left: auto; color: #666; font-size: 13px;">Values in {scale_label}</span>
+    </div>
+    <h3 style="color: #FF9800; margin-bottom: 15px;">Balance Sheet</h3>
+    <div style="overflow-x: auto;">{table_html}</div>
+    """
+    
+    return html
+
+
+def _generate_income_statement_html(df, symbol, period_type, metadata):
+    """Generates fully formatted Income Statement HTML content."""
+    
+    friendly_names = {
+        'reportedCurrency': 'Currency', 
+        'calendarYear': 'Year', 
+        'period': 'Quarter',
+        'duplicate_period': 'Duplicate Period',
+        'revenue': 'Revenue',
+        'costOfRevenue': 'Cost of Revenue',
+        'grossProfit': 'Gross Profit',
+        'researchAndDevelopmentExpenses': 'R&D Expenses',
+        'generalAndAdministrativeExpenses': 'G&A Expenses',
+        'sellingAndMarketingExpenses': 'Sales & Marketing Expenses',
+        'sga': 'SG&A',
+        'otherExpenses': 'Other Expenses',
+        'operatingExpenses': 'Operating Expenses',
+        'depreciationAndAmortization': 'Depreciation & Amortization',
+        'operatingIncome': 'Operating Income',
+        'ebitda': 'EBITDA',
+        'totalOtherIncomeExpensesNet': 'Total Other Income/Expenses',
+        'interestIncome': 'Interest Income',
+        'interestExpense': 'Interest Expense',
+        'incomeBeforeTax': 'Income Before Tax',
+        'incomeTaxExpense': 'Income Tax Expense',
+        'netIncome': 'Net Income',
+        'eps': 'EPS (Basic)',
+        'epsdiluted': 'EPS (Diluted)',
+        'weightedAverageShsOut': 'Weighted Avg Shares Outstanding',
+        'weightedAverageShsOutDil': 'Weighted Avg Shares Outstanding (Diluted)',
+        'fillingDate': 'Filing Date'
+    }
+    
+    df_work = df.copy()
+    
+    # Drop validation delta columns
+    delta_cols = [col for col in df_work.columns if '_delta_rpt_vs_calc' in col]
+    df_work = df_work.drop(columns=delta_cols, errors='ignore')
+    df_work = df_work.drop(columns=['fillingDate', 'duplicate_period'], errors='ignore')
+    
+    # Transpose so dates are columns
+    df_work = df_work.T
+    
+    # Determine Scale based on Revenue
+    revenue_val = pd.to_numeric(df_work.loc['revenue', df_work.columns[0]], errors='coerce')
+    scale_factor = 1_000_000 if revenue_val >= 1_000_000_000 else 1_000
+    scale_label = 'Millions' if scale_factor == 1_000_000 else 'Thousands'
+    
+    # Add % of Revenue rows
+    pct_tags = [
+        'costOfRevenue', 'grossProfit', 'researchAndDevelopmentExpenses',
+        'generalAndAdministrativeExpenses', 'sellingAndMarketingExpenses',
+        'sga', 'otherExpenses', 'operatingExpenses', 'depreciationAndAmortization',
+        'operatingIncome', 'ebitda', 'totalOtherIncomeExpensesNet',
+        'interestIncome', 'interestExpense', 'incomeBeforeTax',
+        'incomeTaxExpense', 'netIncome'
+    ]
+    
+    rows_to_insert = []
+    for tag in pct_tags:
+        if tag in df_work.index:
+            pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                revenue = pd.to_numeric(df_work.loc['revenue', col], errors='coerce')
+                pct_row[col] = (val / revenue * 100) if revenue != 0 else np.nan
+            rows_to_insert.append((tag, pct_row))
+    
+    # Insert percentage rows
+    for parent_tag, pct_row in reversed(rows_to_insert):
+        if parent_tag in df_work.index:
+            idx_pos = df_work.index.get_loc(parent_tag)
+            df_top = df_work.iloc[:idx_pos+1]
+            df_bottom = df_work.iloc[idx_pos+1:]
+            pct_row.name = f"% of Revenue ({friendly_names.get(parent_tag, parent_tag)})"
+            df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
+    
+    # Initial Scaling for main numeric rows
+    meta_rows = ['reportedCurrency', 'calendarYear', 'period']
+    for row in df_work.index:
+        if row not in meta_rows and "%" not in str(row) and row not in ['eps', 'epsdiluted', 'weightedAverageShsOut', 'weightedAverageShsOutDil']:
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
+                if pd.notna(val):
+                    df_work.loc[row, col] = val / scale_factor
+    
+    # Apply UI Hierarchy
+    grand_totals = ['Revenue', 'Gross Profit', 'Operating Income', 'Net Income', 'EBITDA']
+    subtotals = ['Operating Expenses', 'Income Before Tax', 'SG&A']
+    
+    def apply_styles(label):
+        clean = friendly_names.get(label, label)
+        
+        if clean in grand_totals:
+            return f"<strong>{clean}</strong>"
+        if clean in subtotals:
+            return f"&nbsp;&nbsp;{clean}"
+        if "%" in str(label):
+            return f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<em>{label}</em>"
+        if clean in ['EPS (Basic)', 'EPS (Diluted)', 'Weighted Avg Shares Outstanding', 'Weighted Avg Shares Outstanding (Diluted)']:
+            return f"&nbsp;&nbsp;{clean}"
+        return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
+    
+    df_work.index = [apply_styles(idx) for idx in df_work.index]
+    
+    # Cell Value Formatting
+    for idx in df_work.index:
+        for col in df_work.columns:
+            val = df_work.loc[idx, col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                if 'EPS' in str(idx):
+                    fmt = "{:.2f}"
+                elif "%" in str(idx):
+                    fmt = "{:.2f}"
+                elif 'Shares' in str(idx):
+                    fmt = "{:,.0f}"
+                else:
+                    fmt = "{:,.2f}"
+                df_work.loc[idx, col] = fmt.format(val)
+    
+    # Format column headers (dates)
+    df_work.columns = [pd.to_datetime(col).strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(col, errors='coerce')) else str(col) for col in df_work.columns]
+    
+    # Generate table HTML - need to manually build to add class to pct rows
+    header = '<thead><tr><th></th>'
+    for col in df_work.columns:
+        header += f'<th>{col}</th>'
+    header += '</tr></thead>'
+    
+    body = '<tbody>'
+    for idx in df_work.index:
+        # Check if this is a percentage row
+        row_class = ' class="pct-row"' if '% of Revenue' in str(idx) else ''
+        body += f'<tr{row_class}><th>{idx}</th>'
+        for col in df_work.columns:
+            body += f'<td>{df_work.loc[idx, col]}</td>'
+        body += '</tr>'
+    body += '</tbody>'
+    
+    table_html = f'<table class="income-statement-table" border="0">{header}{body}</table>'
+    
+    html = f"""
+    <div class="controls">
+        <button class="btn btn-primary" id="pctToggle" onclick="togglePercentages()">Show % of Revenue</button>
+        <button class="btn btn-success" onclick="exportToExcel()">Export All to Excel</button>
+        <span style="margin-left: auto; color: #666; font-size: 13px;">Values in {scale_label}</span>
+    </div>
+    <h3 style="color: #2196F3; margin-bottom: 15px;">Income Statement</h3>
+    <div style="overflow-x: auto;">{table_html}</div>
+    """
+    
+    return html
+
+
+def _generate_cash_flow_html(df, symbol, period_type, metadata):
+    """Generates fully formatted Cash Flow Statement HTML content."""
+    
+    friendly_names = {
+        'reportedCurrency': 'Currency', 
+        'calendarYear': 'Year', 
+        'period': 'Quarter',
+        'duplicate_period': 'Duplicate Period',
+        # Operating Activities
+        'netIncome': 'Net Income',
+        'depreciationAndAmortization': 'Depreciation & Amortization',
+        'deferredIncomeTax': 'Deferred Income Tax',
+        'stockBasedCompensation': 'Stock-Based Compensation',
+        'changeInWorkingCapital': 'Change in Working Capital',
+        'accountsReceivables': 'Accounts Receivable',
+        'inventory': 'Inventory',
+        'accountsPayables': 'Accounts Payable',
+        'otherWorkingCapital': 'Other Working Capital',
+        'otherNonCashItems': 'Other Non-Cash Items',
+        'netCashProvidedByOperatingActivities': 'Net Cash from Operating Activities',
+        'operatingCashFlow': 'Operating Cash Flow',
+        # Investing Activities
+        'investmentsInPropertyPlantAndEquipment': 'Capital Expenditures',
+        'capitalExpenditure': 'Capital Expenditures',
+        'acquisitionsNet': 'Acquisitions, Net',
+        'purchasesOfInvestments': 'Purchases of Investments',
+        'salesMaturitiesOfInvestments': 'Sales/Maturities of Investments',
+        'otherInvestingActivites': 'Other Investing Activities',
+        'netCashUsedForInvestingActivites': 'Net Cash from Investing Activities',
+        # Financing Activities
+        'debtRepayment': 'Debt Repayment',
+        'commonStockIssued': 'Common Stock Issued',
+        'commonStockRepurchased': 'Common Stock Repurchased',
+        'dividendsPaid': 'Dividends Paid',
+        'otherFinancingActivites': 'Other Financing Activities',
+        'netCashUsedProvidedByFinancingActivities': 'Net Cash from Financing Activities',
+        # Cash Reconciliation
+        'effectOfForexChangesOnCash': 'Effect of FX Changes on Cash',
+        'netChangeInCash': 'Net Change in Cash',
+        'cashAtBeginningOfPeriod': 'Cash at Beginning of Period',
+        'cashAtEndOfPeriod': 'Cash at End of Period',
+        # Derived Metrics
+        'freeCashFlow': 'Free Cash Flow',
+        'fillingDate': 'Filing Date'
+    }
+    
+    df_work = df.copy()
+    
+    # Drop validation delta columns and metadata
+    delta_cols = [col for col in df_work.columns if '_delta_rpt_vs_calc' in col]
+    df_work = df_work.drop(columns=delta_cols, errors='ignore')
+    df_work = df_work.drop(columns=['duplicate_period', 'fillingDate'], errors='ignore')
+    
+    # Transpose so dates are columns
+    df_work = df_work.T
+    
+    # Determine Scale based on Operating Cash Flow
+    ocf_val = pd.to_numeric(df_work.loc['operatingCashFlow', df_work.columns[0]], errors='coerce')
+    scale_factor = 1_000_000 if abs(ocf_val) >= 1_000_000_000 else 1_000
+    scale_label = 'Millions' if scale_factor == 1_000_000 else 'Thousands'
+    
+    # Initial Scaling for main numeric rows
+    meta_rows = ['reportedCurrency', 'calendarYear', 'period']
+    for row in df_work.index:
+        if row not in meta_rows:
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
+                if pd.notna(val):
+                    df_work.loc[row, col] = val / scale_factor
+    
+    # Define section ordering
+    section_order = [
+        'reportedCurrency', 'calendarYear', 'period',
+        # Operating Activities Section
+        'netIncome',
+        'depreciationAndAmortization',
+        'deferredIncomeTax',
+        'stockBasedCompensation',
+        'changeInWorkingCapital',
+        'accountsReceivables',
+        'inventory',
+        'accountsPayables',
+        'otherWorkingCapital',
+        'otherNonCashItems',
+        'netCashProvidedByOperatingActivities',
+        'operatingCashFlow',
+        'spacer1',
+        # Investing Activities Section
+        'investmentsInPropertyPlantAndEquipment',
+        'acquisitionsNet',
+        'purchasesOfInvestments',
+        'salesMaturitiesOfInvestments',
+        'otherInvestingActivites',
+        'netCashUsedForInvestingActivites',
+        'spacer2',
+        # Financing Activities Section
+        'debtRepayment',
+        'commonStockIssued',
+        'commonStockRepurchased',
+        'dividendsPaid',
+        'otherFinancingActivites',
+        'netCashUsedProvidedByFinancingActivities',
+        'spacer3',
+        # Cash Reconciliation Section
+        'effectOfForexChangesOnCash',
+        'netChangeInCash',
+        'cashAtBeginningOfPeriod',
+        'cashAtEndOfPeriod',
+        'spacer4',
+        # Derived Metrics
+        'freeCashFlow'
+    ]
+    
+    # Reorder rows
+    existing_rows = [row for row in section_order if row in df_work.index or row.startswith('spacer')]
+    
+    # Create spacer rows
+    for spacer in ['spacer1', 'spacer2', 'spacer3', 'spacer4']:
+        if spacer in existing_rows:
+            spacer_row = pd.Series(index=df_work.columns, name=spacer, dtype=object)
+            spacer_row[:] = ''
+            df_work = pd.concat([df_work, pd.DataFrame([spacer_row])])
+    
+    df_work = df_work.reindex(existing_rows)
+    
+    # Apply UI Hierarchy
+    grand_totals = [
+        'Operating Cash Flow',
+        'Net Cash from Operating Activities', 
+        'Net Cash from Investing Activities',
+        'Net Cash from Financing Activities',
+        'Net Change in Cash',
+        'Free Cash Flow'
+    ]
+    
+    subtotals = [
+        'Net Income',
+        'Capital Expenditures',
+        'Dividends Paid',
+        'Cash at Beginning of Period',
+        'Cash at End of Period'
+    ]
+    
+    def apply_styles(label):
+        if label.startswith('spacer'):
+            return ''
+        
+        clean = friendly_names.get(label, label)
+        
+        if clean in grand_totals:
+            return f"<strong>{clean}</strong>"
+        if clean in subtotals:
+            return f"&nbsp;&nbsp;{clean}"
+        return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
+    
+    df_work.index = [apply_styles(idx) for idx in df_work.index]
+    
+    # Cell Value Formatting
+    for idx in df_work.index:
+        if idx == '':
+            continue
+        for col in df_work.columns:
+            val = df_work.loc[idx, col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                fmt = "{:,.2f}"
+                df_work.loc[idx, col] = fmt.format(val)
+    
+    # Format column headers (dates)
+    df_work.columns = [pd.to_datetime(col).strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(col, errors='coerce')) else str(col) for col in df_work.columns]
+    
+    # Generate table HTML
+    table_html = df_work.to_html(classes='cash-flow-statement-table', border=0, escape=False)
+    
+    html = f"""
+    <div class="controls">
+        <button class="btn btn-success" onclick="exportToExcel()">Export All to Excel</button>
+        <span style="margin-left: auto; color: #666; font-size: 13px;">Values in {scale_label}</span>
+    </div>
+    <h3 style="color: #4CAF50; margin-bottom: 15px;">Cash Flow Statement</h3>
+    <div style="overflow-x: auto;">{table_html}</div>
+    """
+    
+    return html
+#-----------------------------------------------------
+
+#-----------------------------------------------------	
+#MOD 2/10/26
+#-----------------------------------------------------	
+#MOD 2/10/26
+def fmp_finfFmt(financials_dict):
+    r"""
+    Formats financial statements dictionary into an interactive HTML report with tabs.
+
+    This function transforms all three financial statements (Balance Sheet, Income Statement, 
+    Cash Flow) into a single HTML document with tabbed navigation, automatic scaling, 
+    financial hierarchy styling, and Chart.js for interactive trend analysis.
+
+    Args:
+        financials_dict (dict): Output from fmp_finf() containing:
+            - 'balance_sheet': DataFrame
+            - 'income_statement': DataFrame
+            - 'cash_flow': DataFrame
+            - 'metadata': Company metadata dict
+            - 'symbol': Stock symbol
+            - 'period': Period type
+
+    Returns:
+        None: Writes file to disk and opens it in the default web browser.
+
+    Notes:
+        ### Tabbed Interface
+        - Three tabs: Balance Sheet (Orange), Income Statement (Blue), Cash Flow (Green)
+        - Click row labels in any tab to view trend charts
+        - Each tab maintains its own formatting and hierarchy
+        
+        ### Export Functionality
+        - Export to Excel creates single workbook with 3 worksheets
+        - Each worksheet contains the respective financial statement
+        
+        ### Scaling Logic
+        - ALL statements scaled based on Total Assets for consistency
+        - Ensures Balance Sheet, Income Statement, and Cash Flow use same units
+    """
+    
+    # Extract data from dictionary
+    balance_sheet = financials_dict['balance_sheet']
+    income_statement = financials_dict['income_statement']
+    cash_flow = financials_dict['cash_flow']
+    metadata = financials_dict['metadata']
+    symbol = financials_dict['symbol']
+    period_type = financials_dict['period']
+    company_name = metadata.get('companyName', symbol)
+    
+    # Calculate scale factor based on Total Assets (most reliable for all company types)
+    first_period = balance_sheet.index[0]
+    total_assets = balance_sheet.loc[first_period, 'totalAssets']
+    scale_factor = 1_000_000 if total_assets >= 1_000_000_000 else 1_000
+    scale_label = 'Millions' if scale_factor == 1_000_000 else 'Thousands'
+    
+    # Generate HTML for each statement with consistent scaling
+    bs_html = _generate_balance_sheet_html(balance_sheet, symbol, period_type, metadata, scale_factor, scale_label)
+    inc_html = _generate_income_statement_html(income_statement, symbol, period_type, metadata, scale_factor, scale_label)
+    cf_html = _generate_cash_flow_html(cash_flow, symbol, period_type, metadata, scale_factor, scale_label)
+    
+    # Generate unique filename
+    timestamp = pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"{symbol}_financials_{timestamp}.html"
+    
+    # Combined HTML with tabs
+    styled_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{company_name} ({symbol}) - Financial Statements</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        * {{ box-sizing: border-box; }}
+        body {{ 
+            font-family: -apple-system, system-ui, sans-serif; 
+            padding: 20px; 
+            background-color: #f0f2f5; 
+            margin: 0;
+        }}
+        .container {{ 
+            background: white; 
+            padding: 30px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            max-width: 1400px;
+            margin: 0 auto;
+        }}
+        .header {{ 
+            color: #1a1a1a; 
+            border-bottom: 3px solid #666; 
+            padding-bottom: 15px; 
+            margin-bottom: 20px; 
+        }}
+        .header h1 {{ margin: 0 0 10px 0; font-size: 28px; }}
+        .metadata {{ 
+            color: #666; 
+            font-size: 14px; 
+            margin-bottom: 20px; 
+            padding: 15px; 
+            background-color: #f8f9fa; 
+            border-radius: 6px; 
+        }}
+        .metadata strong {{ color: #1a1a1a; }}
+        
+        /* Tab Navigation */
+        .tab-navigation {{ 
+            display: flex; 
+            gap: 5px; 
+            margin-bottom: 20px;
+            border-bottom: 2px solid #ddd;
+        }}
+        .tab-button {{ 
+            padding: 12px 24px; 
+            border: none; 
+            background: transparent;
+            cursor: pointer; 
+            font-size: 15px; 
+            font-weight: 600; 
+            transition: all 0.2s;
+            border-bottom: 3px solid transparent;
+            color: #666;
+        }}
+        .tab-button:hover {{ 
+            background-color: #f5f5f5;
+            color: #333;
+        }}
+        .tab-button.active {{ 
+            color: #1a1a1a;
+            border-bottom-color: currentColor;
+        }}
+        .tab-button.balance-sheet.active {{ border-bottom-color: #FF9800; color: #FF9800; }}
+        .tab-button.income-statement.active {{ border-bottom-color: #2196F3; color: #2196F3; }}
+        .tab-button.cash-flow.active {{ border-bottom-color: #4CAF50; color: #4CAF50; }}
+        
+        /* Tab Content */
+        .tab-content {{ display: none; }}
+        .tab-content.active {{ display: block; }}
+        
+        /* Controls */
+        .controls {{ 
+            margin-bottom: 20px; 
+            padding: 15px; 
+            background-color: #e3f2fd; 
+            border-radius: 6px; 
+            display: flex; 
+            gap: 10px; 
+            align-items: center;
+        }}
+        .btn {{ 
+            padding: 10px 20px; 
+            border: none; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 14px; 
+            font-weight: 600; 
+            transition: all 0.2s; 
+        }}
+        .btn-primary {{ background-color: #2196F3; color: white; }}
+        .btn-primary:hover {{ background-color: #1976D2; }}
+        .btn-success {{ background-color: #4CAF50; color: white; }}
+        .btn-success:hover {{ background-color: #45a049; }}
+        
+        /* Table Styling */
+        table {{ 
+            border-collapse: collapse; 
+            width: 100%; 
+            font-size: 13px; 
+            color: #333; 
+        }}
+        table thead th {{ 
+            color: white; 
+            padding: 12px 10px; 
+            text-align: right; 
+            text-transform: uppercase; 
+            letter-spacing: 1px; 
+            font-size: 11px; 
+        }}
+        .balance-sheet-table thead th {{ background-color: #FF9800; }}
+        .income-statement-table thead th {{ background-color: #2196F3; }}
+        .cash-flow-statement-table thead th {{ background-color: #4CAF50; }}
+        
+        table tbody th {{ 
+            text-align: left !important; 
+            padding: 8px 15px; 
+            border: 1px solid #e0e0e0; 
+            border-right: 2px solid #ccc; 
+            white-space: nowrap; 
+            cursor: pointer; 
+            font-family: "SF Mono", monospace; 
+            background-color: #fff; 
+        }}
+        table tbody th:hover {{ background-color: #f5f5f5; }}
+        table tbody th:empty {{ 
+            cursor: default; 
+            background-color: transparent; 
+            border: none; 
+        }}
+        table tbody td {{ 
+            border: 1px solid #e0e0e0; 
+            padding: 8px; 
+            text-align: right; 
+        }}
+        table tbody tr:nth-child(even) {{ background-color: #fafafa; }}
+        table tbody tr:has(th:empty) {{ 
+            background-color: transparent; 
+            height: 10px; 
+        }}
+        table tbody tr:has(th:empty) td {{ 
+            border: none; 
+            background-color: transparent; 
+        }}
+        table tbody tr.pct-row {{ display: none; }}
+        
+        strong {{ font-weight: 800 !important; color: #000; }}
+        em {{ color: #777; font-size: 0.85em; }}
+        
+        /* Chart Modal */
+        #chartModal {{ 
+            display: none; 
+            position: fixed; 
+            z-index: 100; 
+            left: 0; 
+            top: 0; 
+            width: 100%; 
+            height: 100%; 
+            background: rgba(0,0,0,0.7); 
+        }}
+        .modal-content {{ 
+            background: white; 
+            margin: 5% auto; 
+            padding: 20px; 
+            border-radius: 12px; 
+            width: 80%; 
+            max-width: 900px; 
+        }}
+        .close {{ 
+            color: #aaa; 
+            float: right; 
+            font-size: 28px; 
+            font-weight: bold; 
+            cursor: pointer; 
+        }}
+        .close:hover {{ color: #000; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{company_name} ({symbol})</h1>
+            <div class="metadata">
+                <strong>Period:</strong> {period_type.upper()} &nbsp;&nbsp;|&nbsp;&nbsp;
+                <strong>Industry:</strong> {metadata.get('industry', 'N/A')} &nbsp;&nbsp;|&nbsp;&nbsp;
+                <strong>Sector:</strong> {metadata.get('sector', 'N/A')} &nbsp;&nbsp;|&nbsp;&nbsp;
+                <strong>Country:</strong> {metadata.get('country', 'N/A')}
+            </div>
+        </div>
+        
+        <div class="tab-navigation">
+            <button class="tab-button balance-sheet active" onclick="switchTab('balance-sheet')">
+                Balance Sheet
+            </button>
+            <button class="tab-button income-statement" onclick="switchTab('income-statement')">
+                Income Statement
+            </button>
+            <button class="tab-button cash-flow" onclick="switchTab('cash-flow')">
+                Cash Flow
+            </button>
+        </div>
+        
+        <!-- Balance Sheet Tab -->
+        <div id="balance-sheet-content" class="tab-content active">
+            {bs_html}
+        </div>
+        
+        <!-- Income Statement Tab -->
+        <div id="income-statement-content" class="tab-content">
+            {inc_html}
+        </div>
+        
+        <!-- Cash Flow Tab -->
+        <div id="cash-flow-content" class="tab-content">
+            {cf_html}
+        </div>
+    </div>
+    
+    <!-- Chart Modal -->
+    <div id="chartModal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <canvas id="rowChart"></canvas>
+        </div>
+    </div>
+    
+    <script>
+        // Tab Switching
+        function switchTab(tabName) {{
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {{
+                content.classList.remove('active');
+            }});
+            
+            // Remove active class from all buttons
+            document.querySelectorAll('.tab-button').forEach(button => {{
+                button.classList.remove('active');
+            }});
+            
+            // Show selected tab content
+            document.getElementById(tabName + '-content').classList.add('active');
+            
+            // Add active class to selected button
+            document.querySelector('.tab-button.' + tabName).classList.add('active');
+        }}
+        
+        // Export to Excel (all 3 sheets)
+function exportToExcel() {{
+    const wb = XLSX.utils.book_new();
+    
+    // Helper function to create worksheet with proper formatting
+    function createWorksheet(table, excludeHidden) {{
+        const data = extractTableData(table, excludeHidden);
+        
+        // Create worksheet manually with cell-by-cell control
+        const ws = {{}};
+        const range = {{ s: {{ c: 0, r: 0 }}, e: {{ c: data[0].length - 1, r: data.length - 1 }} }};
+        
+        for (let R = 0; R < data.length; ++R) {{
+            for (let C = 0; C < data[R].length; ++C) {{
+                const cell_ref = XLSX.utils.encode_cell({{ r: R, c: C }});
+                const cell_value = data[R][C];
+                
+                // For first row (header), force everything to string
+                if (R === 0) {{
+                    ws[cell_ref] = {{ t: 's', v: String(cell_value) }};
+                }} else {{
+                    // For data rows, keep numbers as numbers, text as text
+                    if (typeof cell_value === 'number') {{
+                        ws[cell_ref] = {{ t: 'n', v: cell_value }};
+                    }} else {{
+                        ws[cell_ref] = {{ t: 's', v: String(cell_value) }};
+                    }}
+                }}
+            }}
+        }}
+        
+        ws['!ref'] = XLSX.utils.encode_range(range);
+        return ws;
+    }}
+    
+    // Extract Balance Sheet data (exclude hidden pct rows)
+    const bs_table = document.querySelector('#balance-sheet-content table');
+    if (bs_table) {{
+        const ws_bs = createWorksheet(bs_table, true);
+        XLSX.utils.book_append_sheet(wb, ws_bs, "Balance Sheet");
+    }}
+    
+    // Extract Income Statement data (exclude hidden pct rows)
+    const inc_table = document.querySelector('#income-statement-content table');
+    if (inc_table) {{
+        const ws_inc = createWorksheet(inc_table, true);
+        XLSX.utils.book_append_sheet(wb, ws_inc, "Income Statement");
+    }}
+    
+    // Extract Cash Flow data
+    const cf_table = document.querySelector('#cash-flow-content table');
+    if (cf_table) {{
+        const ws_cf = createWorksheet(cf_table, false);
+        XLSX.utils.book_append_sheet(wb, ws_cf, "Cash Flow");
+    }}
+    
+    XLSX.writeFile(wb, "{symbol}_financials.xlsx");
+}}
+        
+        function extractTableData(table, excludeHidden = false) {{
+    const rows = Array.from(table.querySelectorAll('tr')).filter(row => {{
+        // Keep header row (in thead) - this has the dates
+        if (row.parentElement.tagName === 'THEAD') return true;
+        
+        const th = row.querySelector('th');
+        // Exclude empty spacer rows
+        if (th && th.innerHTML.trim() === '') return false;
+        // Exclude hidden percentage rows if requested
+        if (excludeHidden && row.classList.contains('pct-row') && row.style.display === 'none') return false;
+        
+        return true;
+    }});
+    
+    return rows.map((row, rowIndex) => {{
+        return Array.from(row.querySelectorAll('th, td')).map((cell, colIndex) => {{
+            const text = (cell.innerText || cell.textContent).trim();
+            
+            // For header row dates, add a tab prefix to prevent auto-formatting
+            if (rowIndex === 0 && colIndex > 0 && /^\d{{4}}-\d{{2}}-\d{{2}}$/.test(text)) {{
+                return "\t" + text;  // Tab character prevents date conversion
+            }}
+            
+            // For data cells
+            if (rowIndex > 0) {{
+                const cleaned = text.replace(/,/g, '');
+                const num = parseFloat(cleaned);
+                return isNaN(num) ? text : num;
+            }}
+            
+            return text;
+        }});
+    }});
+}}
+        
+        // Toggle percentage rows (Income Statement)
+        let pctVisible = false;
+        function togglePercentages() {{
+            pctVisible = !pctVisible;
+            const pctRows = document.querySelectorAll('#income-statement-content table tbody tr.pct-row');
+            const btn = document.getElementById('pctToggle');
+            
+            pctRows.forEach(row => {{
+                row.style.display = pctVisible ? 'table-row' : 'none';
+            }});
+            
+            btn.textContent = pctVisible ? 'Hide % of Revenue' : 'Show % of Revenue';
+        }}
+        
+        // Toggle percentage rows (Balance Sheet)
+        let bsPctVisible = false;
+        function toggleBalanceSheetPercentages() {{
+            bsPctVisible = !bsPctVisible;
+            const pctRows = document.querySelectorAll('#balance-sheet-content table tbody tr.pct-row');
+            const btn = document.getElementById('bsPctToggle');
+            
+            pctRows.forEach(row => {{
+                row.style.display = bsPctVisible ? 'table-row' : 'none';
+            }});
+            
+            btn.textContent = bsPctVisible ? 'Hide Percentages' : 'Show Percentages';
+        }}
+        
+        // Chart functionality
+        let myChart = null;
+        
+        function setupChartListeners() {{
+            document.querySelectorAll('table tbody th').forEach(header => {{
+                if (header.innerHTML.trim() === '') return;
+                
+                header.onclick = function() {{
+                    const row = this.parentElement;
+                    const label = this.innerText.trim();
+                    const table = this.closest('table');
+                    const labels = Array.from(table.querySelectorAll('thead th')).slice(1).map(th => th.innerText);
+                    const data = Array.from(row.querySelectorAll('td')).map(td => {{
+                        const val = parseFloat(td.innerText.replace(/,/g, ''));
+                        return isNaN(val) ? 0 : val;
+                    }});
+                    
+                    // Determine color based on which tab
+                    let color = '#2196F3';
+                    if (table.classList.contains('balance-sheet-table')) color = '#FF9800';
+                    if (table.classList.contains('cash-flow-statement-table')) color = '#4CAF50';
+                    
+                    document.getElementById('chartModal').style.display = 'block';
+                    if (myChart) myChart.destroy();
+                    myChart = new Chart(document.getElementById('rowChart'), {{
+                        type: 'line',
+                        data: {{
+                            labels,
+                            datasets: [{{
+                                label,
+                                data,
+                                borderColor: color,
+                                backgroundColor: color.replace(')', ', 0.1)').replace('rgb', 'rgba'),
+                                fill: true,
+                                tension: 0.3
+                            }}]
+                        }},
+                        options: {{
+                            responsive: true,
+                            plugins: {{
+                                title: {{
+                                    display: true,
+                                    text: label
+                                }}
+                            }}
+                        }}
+                    }});
+                }};
+            }});
+        }}
+        
+        function closeModal() {{
+            document.getElementById('chartModal').style.display = 'none';
+        }}
+        
+        // Initialize chart listeners after page load
+        window.addEventListener('load', setupChartListeners);
+    </script>
+</body>
+</html>
+"""
+    
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(styled_html)
+    
+    webbrowser.open('file://' + os.path.abspath(filename))
+    print(f"✓ Saved to: {filename}")
+#-----------------------------------------------------
+
+#-----------------------------------------------------	
+# HELPER FUNCTIONS FOR HTML GENERATION
+def _generate_balance_sheet_html(df, symbol, period_type, metadata, scale_factor, scale_label):
+    """Generates fully formatted Balance Sheet HTML content WITH percentages and toggle."""
+    
+    friendly_names = {
+        'reportedCurrency': 'Currency', 
+        'calendarYear': 'Year', 
+        'period': 'Quarter',
+        'duplicate_period': 'Duplicate Period',
+        # Assets
+        'cashAndCashEquivalents': 'Cash & Cash Equivalents',
+        'shortTermInvestments': 'Short-Term Investments',
+        'cashAndShortTermInvestments': 'Cash & Short-Term Investments',
+        'netReceivables': 'Net Receivables',
+        'inventory': 'Inventory',
+        'otherCurrentAssets': 'Other Current Assets',
+        'totalCurrentAssets': 'Total Current Assets',
+        'propertyPlantEquipmentNet': 'Property, Plant & Equipment (Net)',
+        'goodwill': 'Goodwill',
+        'intangibleAssets': 'Intangible Assets',
+        'goodwillAndIntangibleAssets': 'Goodwill & Intangible Assets',
+        'longTermInvestments': 'Long-Term Investments',
+        'taxAssets': 'Tax Assets',
+        'otherNonCurrentAssets': 'Other Non-Current Assets',
+        'totalNonCurrentAssets': 'Total Non-Current Assets',
+        'otherAssets': 'Other Assets',
+        'totalAssets': 'Total Assets',
+        # Liabilities
+        'accountPayables': 'Accounts Payable',
+        'shortTermDebt': 'Short-Term Debt',
+        'taxPayables': 'Tax Payables',
+        'deferredRevenue': 'Deferred Revenue',
+        'otherCurrentLiabilities': 'Other Current Liabilities',
+        'totalCurrentLiabilities': 'Total Current Liabilities',
+        'longTermDebt': 'Long-Term Debt',
+        'deferredRevenueNonCurrent': 'Deferred Revenue (Non-Current)',
+        'deferredTaxLiabilitiesNonCurrent': 'Deferred Tax Liabilities (Non-Current)',
+        'otherNonCurrentLiabilities': 'Other Non-Current Liabilities',
+        'totalNonCurrentLiabilities': 'Total Non-Current Liabilities',
+        'otherLiabilities': 'Other Liabilities',
+        'capitalLeaseObligations': 'Capital Lease Obligations',
+        'totalLiabilities': 'Total Liabilities',
+        # Equity
+        'preferredStock': 'Preferred Stock',
+        'commonStock': 'Common Stock',
+        'retainedEarnings': 'Retained Earnings',
+        'accumulatedOtherComprehensiveIncomeLoss': 'Accumulated Other Comprehensive Income/Loss',
+        'othertotalStockholdersEquity': 'Other Stockholders Equity',
+        'totalStockholdersEquity': 'Total Stockholders Equity',
+        'totalEquity': 'Total Equity',
+        'totalLiabilitiesAndStockholdersEquity': 'Total Liabilities & Stockholders Equity',
+        'minorityInterest': 'Minority Interest',
+        'totalLiabilitiesAndTotalEquity': 'Total Liabilities & Total Equity',
+        'totalInvestments': 'Total Investments',
+        'totalDebt': 'Total Debt',
+        'netDebt': 'Net Debt',
+        'fillingDate': 'Filing Date'
+    }
+    
+    df_work = df.copy()
+    
+    # Drop validation delta columns and metadata
+    delta_cols = [col for col in df_work.columns if '_delta_rpt_vs_calc' in col]
+    df_work = df_work.drop(columns=delta_cols, errors='ignore')
+    df_work = df_work.drop(columns=['duplicate_period', 'fillingDate'], errors='ignore')
+    
+    # Transpose so dates are columns
+    df_work = df_work.T
+    
+    # Use passed scale_factor (no longer calculate internally)
+    
+    # Add % of Total Assets for asset items
+    asset_pct_tags = [
+        'cashAndCashEquivalents', 'shortTermInvestments', 'cashAndShortTermInvestments',
+        'netReceivables', 'inventory', 'otherCurrentAssets', 'totalCurrentAssets',
+        'propertyPlantEquipmentNet', 'goodwill', 'intangibleAssets', 
+        'goodwillAndIntangibleAssets', 'longTermInvestments', 'taxAssets',
+        'otherNonCurrentAssets', 'totalNonCurrentAssets', 'otherAssets'
+    ]
+    
+    # Add % of Total Liabilities for liability items
+    liability_pct_tags = [
+        'accountPayables', 'shortTermDebt', 'taxPayables', 'deferredRevenue',
+        'otherCurrentLiabilities', 'totalCurrentLiabilities', 'longTermDebt',
+        'deferredRevenueNonCurrent', 'deferredTaxLiabilitiesNonCurrent',
+        'otherNonCurrentLiabilities', 'totalNonCurrentLiabilities', 'otherLiabilities'
+    ]
+    
+    # Add % of Total Equity for equity items
+    equity_pct_tags = [
+        'preferredStock', 'commonStock', 'retainedEarnings',
+        'accumulatedOtherComprehensiveIncomeLoss', 'othertotalStockholdersEquity',
+        'totalStockholdersEquity', 'totalEquity'
+    ]
+    
+    rows_to_insert = []
+    
+    # Calculate % of Total Assets
+    for tag in asset_pct_tags:
+        if tag in df_work.index and 'totalAssets' in df_work.index:
+            pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                total_assets = pd.to_numeric(df_work.loc['totalAssets', col], errors='coerce')
+                pct_row[col] = (val / total_assets * 100) if total_assets != 0 else np.nan
+            rows_to_insert.append((tag, pct_row, '% of Total Assets'))
+    
+    # Calculate % of Total Liabilities
+    for tag in liability_pct_tags:
+        if tag in df_work.index and 'totalLiabilities' in df_work.index:
+            pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                total_liab = pd.to_numeric(df_work.loc['totalLiabilities', col], errors='coerce')
+                pct_row[col] = (val / total_liab * 100) if total_liab != 0 else np.nan
+            rows_to_insert.append((tag, pct_row, '% of Total Liabilities'))
+    
+    # Calculate % of Total Equity
+    for tag in equity_pct_tags:
+        if tag in df_work.index:
+            # Use totalEquity if available, otherwise totalStockholdersEquity
+            equity_tag = 'totalEquity' if 'totalEquity' in df_work.index else 'totalStockholdersEquity'
+            if equity_tag in df_work.index:
+                pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+                for col in df_work.columns:
+                    val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                    total_equity = pd.to_numeric(df_work.loc[equity_tag, col], errors='coerce')
+                    pct_row[col] = (val / total_equity * 100) if total_equity != 0 else np.nan
+                rows_to_insert.append((tag, pct_row, '% of Total Equity'))
+    
+    # Insert percentage rows
+    for parent_tag, pct_row, pct_label in reversed(rows_to_insert):
+        if parent_tag in df_work.index:
+            idx_pos = df_work.index.get_loc(parent_tag)
+            df_top = df_work.iloc[:idx_pos+1]
+            df_bottom = df_work.iloc[idx_pos+1:]
+            pct_row.name = f"{pct_label} ({friendly_names.get(parent_tag, parent_tag)})"
+            df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
+    
+    # Initial Scaling for main numeric rows
+    meta_rows = ['reportedCurrency', 'calendarYear', 'period']
+    for row in df_work.index:
+        if row not in meta_rows and "%" not in str(row):
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
+                if pd.notna(val):
+                    df_work.loc[row, col] = val / scale_factor
+    
+    # Apply UI Hierarchy
+    grand_totals = [
+        'Total Current Assets',
+        'Total Non-Current Assets',
+        'Total Assets',
+        'Total Current Liabilities',
+        'Total Non-Current Liabilities',
+        'Total Liabilities',
+        'Total Stockholders Equity',
+        'Total Equity',
+        'Total Liabilities & Stockholders Equity',
+        'Total Liabilities & Total Equity'
+    ]
+    
+    subtotals = [
+        'Cash & Short-Term Investments',
+        'Goodwill & Intangible Assets',
+        'Total Debt',
+        'Net Debt'
+    ]
+    
+    def apply_styles(label):
+        clean = friendly_names.get(label, label)
+        
+        if clean in grand_totals:
+            return f"<strong>{clean}</strong>"
+        if clean in subtotals:
+            return f"&nbsp;&nbsp;{clean}"
+        if "%" in str(label):
+            return f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<em>{label}</em>"
+        return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
+    
+    df_work.index = [apply_styles(idx) for idx in df_work.index]
+    
+    # Cell Value Formatting
+    for idx in df_work.index:
+        for col in df_work.columns:
+            val = df_work.loc[idx, col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                if "%" in str(idx):
+                    fmt = "{:.2f}"
+                else:
+                    fmt = "{:,.2f}"
+                df_work.loc[idx, col] = fmt.format(val)
+    
+    # Format column headers (dates)
+    df_work.columns = [pd.to_datetime(col).strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(col, errors='coerce')) else str(col) for col in df_work.columns]
+    
+    # Generate table HTML with pct-row class
+    header = '<thead><tr><th></th>'
+    for col in df_work.columns:
+        header += f'<th>{col}</th>'
+    header += '</tr></thead>'
+    
+    body = '<tbody>'
+    for idx in df_work.index:
+        # Check if this is a percentage row OR a spacer row
+        if idx == '':
+            body += f'<tr><th></th>'
+            for col in df_work.columns:
+                body += '<td></td>'
+            body += '</tr>'
+        else:
+            row_class = ' class="pct-row"' if '% of Total' in str(idx) else ''
+            body += f'<tr{row_class}><th>{idx}</th>'
+            for col in df_work.columns:
+                body += f'<td>{df_work.loc[idx, col]}</td>'
+            body += '</tr>'
+    body += '</tbody>'
+    
+    table_html = f'<table class="balance-sheet-table" border="0">{header}{body}</table>'
+    
+    html = f"""
+    <div class="controls">
+        <button class="btn btn-primary" id="bsPctToggle" onclick="toggleBalanceSheetPercentages()">Show Percentages</button>
+        <button class="btn btn-success" onclick="exportToExcel()">Export All to Excel</button>
+        <span style="margin-left: auto; color: #666; font-size: 13px;">Values in {scale_label}</span>
+    </div>
+    <h3 style="color: #FF9800; margin-bottom: 15px;">Balance Sheet</h3>
+    <div style="overflow-x: auto;">{table_html}</div>
+    """
+    
+    return html
+
+
+def _generate_income_statement_html(df, symbol, period_type, metadata, scale_factor, scale_label):
+    """Generates fully formatted Income Statement HTML content."""
+    
+    friendly_names = {
+        'reportedCurrency': 'Currency', 
+        'calendarYear': 'Year', 
+        'period': 'Quarter',
+        'duplicate_period': 'Duplicate Period',
+        'revenue': 'Revenue',
+        'costOfRevenue': 'Cost of Revenue',
+        'grossProfit': 'Gross Profit',
+        'researchAndDevelopmentExpenses': 'R&D Expenses',
+        'generalAndAdministrativeExpenses': 'G&A Expenses',
+        'sellingAndMarketingExpenses': 'Sales & Marketing Expenses',
+        'sga': 'SG&A',
+        'otherExpenses': 'Other Expenses',
+        'operatingExpenses': 'Operating Expenses',
+        'depreciationAndAmortization': 'Depreciation & Amortization',
+        'operatingIncome': 'Operating Income',
+        'ebitda': 'EBITDA',
+        'totalOtherIncomeExpensesNet': 'Total Other Income/Expenses',
+        'interestIncome': 'Interest Income',
+        'interestExpense': 'Interest Expense',
+        'incomeBeforeTax': 'Income Before Tax',
+        'incomeTaxExpense': 'Income Tax Expense',
+        'netIncome': 'Net Income',
+        'eps': 'EPS (Basic)',
+        'epsdiluted': 'EPS (Diluted)',
+        'weightedAverageShsOut': 'Weighted Avg Shares Outstanding',
+        'weightedAverageShsOutDil': 'Weighted Avg Shares Outstanding (Diluted)',
+        'fillingDate': 'Filing Date'
+    }
+    
+    df_work = df.copy()
+    
+    # Drop validation delta columns
+    delta_cols = [col for col in df_work.columns if '_delta_rpt_vs_calc' in col]
+    df_work = df_work.drop(columns=delta_cols, errors='ignore')
+    df_work = df_work.drop(columns=['fillingDate', 'duplicate_period'], errors='ignore')
+    
+    # Transpose so dates are columns
+    df_work = df_work.T
+    
+    # Use passed scale_factor (no longer calculate internally)
+    
+    # Add % of Revenue rows
+    pct_tags = [
+        'costOfRevenue', 'grossProfit', 'researchAndDevelopmentExpenses',
+        'generalAndAdministrativeExpenses', 'sellingAndMarketingExpenses',
+        'sga', 'otherExpenses', 'operatingExpenses', 'depreciationAndAmortization',
+        'operatingIncome', 'ebitda', 'totalOtherIncomeExpensesNet',
+        'interestIncome', 'interestExpense', 'incomeBeforeTax',
+        'incomeTaxExpense', 'netIncome'
+    ]
+    
+    rows_to_insert = []
+    for tag in pct_tags:
+        if tag in df_work.index:
+            pct_row = pd.Series(index=df_work.columns, name=f"{tag}_pct", dtype=float)
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[tag, col], errors='coerce')
+                revenue = pd.to_numeric(df_work.loc['revenue', col], errors='coerce')
+                pct_row[col] = (val / revenue * 100) if revenue != 0 else np.nan
+            rows_to_insert.append((tag, pct_row))
+    
+    # Insert percentage rows
+    for parent_tag, pct_row in reversed(rows_to_insert):
+        if parent_tag in df_work.index:
+            idx_pos = df_work.index.get_loc(parent_tag)
+            df_top = df_work.iloc[:idx_pos+1]
+            df_bottom = df_work.iloc[idx_pos+1:]
+            pct_row.name = f"% of Revenue ({friendly_names.get(parent_tag, parent_tag)})"
+            df_work = pd.concat([df_top, pd.DataFrame([pct_row]), df_bottom])
+    
+    # Initial Scaling for main numeric rows
+    meta_rows = ['reportedCurrency', 'calendarYear', 'period']
+    for row in df_work.index:
+        if row not in meta_rows and "%" not in str(row) and row not in ['eps', 'epsdiluted', 'weightedAverageShsOut', 'weightedAverageShsOutDil']:
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
+                if pd.notna(val):
+                    df_work.loc[row, col] = val / scale_factor
+    
+    # Apply UI Hierarchy
+    grand_totals = ['Revenue', 'Gross Profit', 'Operating Income', 'Net Income', 'EBITDA']
+    subtotals = ['Operating Expenses', 'Income Before Tax', 'SG&A']
+    
+    def apply_styles(label):
+        clean = friendly_names.get(label, label)
+        
+        if clean in grand_totals:
+            return f"<strong>{clean}</strong>"
+        if clean in subtotals:
+            return f"&nbsp;&nbsp;{clean}"
+        if "%" in str(label):
+            return f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<em>{label}</em>"
+        if clean in ['EPS (Basic)', 'EPS (Diluted)', 'Weighted Avg Shares Outstanding', 'Weighted Avg Shares Outstanding (Diluted)']:
+            return f"&nbsp;&nbsp;{clean}"
+        return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
+    
+    df_work.index = [apply_styles(idx) for idx in df_work.index]
+    
+    # Cell Value Formatting
+    for idx in df_work.index:
+        for col in df_work.columns:
+            val = df_work.loc[idx, col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                if 'EPS' in str(idx):
+                    fmt = "{:.2f}"
+                elif "%" in str(idx):
+                    fmt = "{:.2f}"
+                elif 'Shares' in str(idx):
+                    fmt = "{:,.0f}"
+                else:
+                    fmt = "{:,.2f}"
+                df_work.loc[idx, col] = fmt.format(val)
+    
+    # Format column headers (dates)
+    df_work.columns = [pd.to_datetime(col).strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(col, errors='coerce')) else str(col) for col in df_work.columns]
+    
+    # Generate table HTML - need to manually build to add class to pct rows
+    header = '<thead><tr><th></th>'
+    for col in df_work.columns:
+        header += f'<th>{col}</th>'
+    header += '</tr></thead>'
+    
+    body = '<tbody>'
+    for idx in df_work.index:
+        # Check if this is a percentage row
+        row_class = ' class="pct-row"' if '% of Revenue' in str(idx) else ''
+        body += f'<tr{row_class}><th>{idx}</th>'
+        for col in df_work.columns:
+            body += f'<td>{df_work.loc[idx, col]}</td>'
+        body += '</tr>'
+    body += '</tbody>'
+    
+    table_html = f'<table class="income-statement-table" border="0">{header}{body}</table>'
+    
+    html = f"""
+    <div class="controls">
+        <button class="btn btn-primary" id="pctToggle" onclick="togglePercentages()">Show % of Revenue</button>
+        <button class="btn btn-success" onclick="exportToExcel()">Export All to Excel</button>
+        <span style="margin-left: auto; color: #666; font-size: 13px;">Values in {scale_label}</span>
+    </div>
+    <h3 style="color: #2196F3; margin-bottom: 15px;">Income Statement</h3>
+    <div style="overflow-x: auto;">{table_html}</div>
+    """
+    
+    return html
+
+
+def _generate_cash_flow_html(df, symbol, period_type, metadata, scale_factor, scale_label):
+    """Generates fully formatted Cash Flow Statement HTML content."""
+    
+    friendly_names = {
+        'reportedCurrency': 'Currency', 
+        'calendarYear': 'Year', 
+        'period': 'Quarter',
+        'duplicate_period': 'Duplicate Period',
+        # Operating Activities
+        'netIncome': 'Net Income',
+        'depreciationAndAmortization': 'Depreciation & Amortization',
+        'deferredIncomeTax': 'Deferred Income Tax',
+        'stockBasedCompensation': 'Stock-Based Compensation',
+        'changeInWorkingCapital': 'Change in Working Capital',
+        'accountsReceivables': 'Accounts Receivable',
+        'inventory': 'Inventory',
+        'accountsPayables': 'Accounts Payable',
+        'otherWorkingCapital': 'Other Working Capital',
+        'otherNonCashItems': 'Other Non-Cash Items',
+        'netCashProvidedByOperatingActivities': 'Net Cash from Operating Activities',
+        'operatingCashFlow': 'Operating Cash Flow',
+        # Investing Activities
+        'investmentsInPropertyPlantAndEquipment': 'Capital Expenditures',
+        'capitalExpenditure': 'Capital Expenditures',
+        'acquisitionsNet': 'Acquisitions, Net',
+        'purchasesOfInvestments': 'Purchases of Investments',
+        'salesMaturitiesOfInvestments': 'Sales/Maturities of Investments',
+        'otherInvestingActivites': 'Other Investing Activities',
+        'netCashUsedForInvestingActivites': 'Net Cash from Investing Activities',
+        # Financing Activities
+        'debtRepayment': 'Debt Repayment',
+        'commonStockIssued': 'Common Stock Issued',
+        'commonStockRepurchased': 'Common Stock Repurchased',
+        'dividendsPaid': 'Dividends Paid',
+        'otherFinancingActivites': 'Other Financing Activities',
+        'netCashUsedProvidedByFinancingActivities': 'Net Cash from Financing Activities',
+        # Cash Reconciliation
+        'effectOfForexChangesOnCash': 'Effect of FX Changes on Cash',
+        'netChangeInCash': 'Net Change in Cash',
+        'cashAtBeginningOfPeriod': 'Cash at Beginning of Period',
+        'cashAtEndOfPeriod': 'Cash at End of Period',
+        # Derived Metrics
+        'freeCashFlow': 'Free Cash Flow',
+        'fillingDate': 'Filing Date'
+    }
+    
+    df_work = df.copy()
+    
+    # Drop validation delta columns and metadata
+    delta_cols = [col for col in df_work.columns if '_delta_rpt_vs_calc' in col]
+    df_work = df_work.drop(columns=delta_cols, errors='ignore')
+    df_work = df_work.drop(columns=['duplicate_period', 'fillingDate'], errors='ignore')
+    
+    # Transpose so dates are columns
+    df_work = df_work.T
+    
+    # Use passed scale_factor (no longer calculate internally)
+    
+    # Initial Scaling for main numeric rows
+    meta_rows = ['reportedCurrency', 'calendarYear', 'period']
+    for row in df_work.index:
+        if row not in meta_rows:
+            for col in df_work.columns:
+                val = pd.to_numeric(df_work.loc[row, col], errors='coerce')
+                if pd.notna(val):
+                    df_work.loc[row, col] = val / scale_factor
+    
+    # Define section ordering
+    section_order = [
+        'reportedCurrency', 'calendarYear', 'period',
+        # Operating Activities Section
+        'netIncome',
+        'depreciationAndAmortization',
+        'deferredIncomeTax',
+        'stockBasedCompensation',
+        'changeInWorkingCapital',
+        'accountsReceivables',
+        'inventory',
+        'accountsPayables',
+        'otherWorkingCapital',
+        'otherNonCashItems',
+        'netCashProvidedByOperatingActivities',
+        'operatingCashFlow',
+        'spacer1',
+        # Investing Activities Section
+        'investmentsInPropertyPlantAndEquipment',
+        'acquisitionsNet',
+        'purchasesOfInvestments',
+        'salesMaturitiesOfInvestments',
+        'otherInvestingActivites',
+        'netCashUsedForInvestingActivites',
+        'spacer2',
+        # Financing Activities Section
+        'debtRepayment',
+        'commonStockIssued',
+        'commonStockRepurchased',
+        'dividendsPaid',
+        'otherFinancingActivites',
+        'netCashUsedProvidedByFinancingActivities',
+        'spacer3',
+        # Cash Reconciliation Section
+        'effectOfForexChangesOnCash',
+        'netChangeInCash',
+        'cashAtBeginningOfPeriod',
+        'cashAtEndOfPeriod',
+        'spacer4',
+        # Derived Metrics
+        'freeCashFlow'
+    ]
+    
+    # Reorder rows
+    existing_rows = [row for row in section_order if row in df_work.index or row.startswith('spacer')]
+    
+    # Create spacer rows
+    for spacer in ['spacer1', 'spacer2', 'spacer3', 'spacer4']:
+        if spacer in existing_rows:
+            spacer_row = pd.Series(index=df_work.columns, name=spacer, dtype=object)
+            spacer_row[:] = ''
+            df_work = pd.concat([df_work, pd.DataFrame([spacer_row])])
+    
+    df_work = df_work.reindex(existing_rows)
+    
+    # Apply UI Hierarchy
+    grand_totals = [
+        'Operating Cash Flow',
+        'Net Cash from Operating Activities', 
+        'Net Cash from Investing Activities',
+        'Net Cash from Financing Activities',
+        'Net Change in Cash',
+        'Free Cash Flow'
+    ]
+    
+    subtotals = [
+        'Net Income',
+        'Capital Expenditures',
+        'Dividends Paid',
+        'Cash at Beginning of Period',
+        'Cash at End of Period'
+    ]
+    
+    def apply_styles(label):
+        if label.startswith('spacer'):
+            return ''
+        
+        clean = friendly_names.get(label, label)
+        
+        if clean in grand_totals:
+            return f"<strong>{clean}</strong>"
+        if clean in subtotals:
+            return f"&nbsp;&nbsp;{clean}"
+        return f"&nbsp;&nbsp;&nbsp;&nbsp;{clean}"
+    
+    df_work.index = [apply_styles(idx) for idx in df_work.index]
+    
+    # Cell Value Formatting
+    for idx in df_work.index:
+        if idx == '':
+            continue
+        for col in df_work.columns:
+            val = df_work.loc[idx, col]
+            if isinstance(val, (int, float)) and pd.notna(val):
+                fmt = "{:,.2f}"
+                df_work.loc[idx, col] = fmt.format(val)
+    
+    # Format column headers (dates)
+    df_work.columns = [pd.to_datetime(col).strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(col, errors='coerce')) else str(col) for col in df_work.columns]
+    
+    # Generate table HTML
+    table_html = df_work.to_html(classes='cash-flow-statement-table', border=0, escape=False)
+    
+    html = f"""
+    <div class="controls">
+        <button class="btn btn-success" onclick="exportToExcel()">Export All to Excel</button>
+        <span style="margin-left: auto; color: #666; font-size: 13px;">Values in {scale_label}</span>
+    </div>
+    <h3 style="color: #4CAF50; margin-bottom: 15px;">Cash Flow Statement</h3>
+    <div style="overflow-x: auto;">{table_html}</div>
+    """
+    
+    return html
+
 
 #----------------------------------------------------------
 #MOD 1/20/267:59AM
