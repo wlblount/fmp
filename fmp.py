@@ -67,7 +67,7 @@ def fmp_price(syms, start='1960-01-01', end=str(dt.datetime.now().date()), facs=
     
     
    
-    url=requote_uri(f'https://financialmodelingprep.com/api/v3/historical-price-full/{syms}?from=     {start}&to={end}&apikey={apikey}')
+    url=requote_uri(f'https://financialmodelingprep.com/api/v3/historical-price-full/{syms}?from={start}&to={end}&apikey={apikey}')
     response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     # Updated fmp_price logic in fmp.py
@@ -83,7 +83,9 @@ def fmp_price(syms, start='1960-01-01', end=str(dt.datetime.now().date()), facs=
     idx = [sub['date'] for sub in l]
     idx=pd.to_datetime(idx)
     df = pd.DataFrame([[sub[k] for k in facs] for sub in l], columns=facs, index=idx)
-    return df.iloc[::-1]
+    df = df.iloc[::-1]
+    df = df.loc[start:end]
+    return df
 
 
 #-----------------------------------------------------
@@ -2495,6 +2497,66 @@ def fmp_cashfts(sym, facs=None, period='quarter', limit=400, save_md=None):
     except Exception as e:
         print(f"Error in fmp_cashfts for {sym}: {e}")
         return pd.DataFrame()
+#-----------------------------------------------------------------
+## MOD  02/12/2026 7:11PM
+def fmp_cashftsar(sym, facs=None, period='quarter', limit=400):
+    '''
+    Retrieves raw XBRL "As-Reported" Cash Flow Statement data from FMP v3.
+    Designed for auditing and reference of raw filing tags.
+    
+    Parameters:
+    -----------
+    sym : str
+        The stock ticker symbol (e.g., 'AAPL', 'INTC').
+    facs : list, optional
+        List of specific raw XBRL tags to return.
+        NOTE: Tags vary by company/industry. To see available tags for a ticker:
+              >>> df = fmp_cashftsar('AAPL')
+              >>> print(df.columns.tolist())
+    period : str, default 'quarter'
+        The time interval. Options: 'quarter', 'annual' (or 'year').
+    limit : int, default 400
+        Number of historical filings to retrieve.
+
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame indexed by date (oldest to newest).
+    '''
+    sym = sym.upper().strip()
+    
+    # Normalize period to 'annual' or 'quarter' per API requirements
+    p = "annual" if period.lower() in ("year", "annual") else "quarter"
+    url = f"https://financialmodelingprep.com/api/v3/cash-flow-statement-as-reported/{sym}?period={p}&limit={int(limit)}&apikey={apikey}"
+    url = requote_uri(url)
+    try:
+        response = urlopen(url, context=ssl_context)
+        stuff = json.loads(response.read().decode("utf-8"))
+        if not isinstance(stuff, list) or len(stuff) == 0:
+            return pd.DataFrame()
+        # Load into DataFrame
+        df = pd.DataFrame(stuff)
+        # 1. Standardize the Index
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'], errors="coerce")
+            df = df.dropna(subset=['date']).set_index('date')
+            df.index.name = "date"
+        
+        # 2. Chronological Sort
+        df = df.sort_index()
+        # 3. CLEANUP: Prune columns that are 100% NaN (unused XBRL tags)
+        # This is vital for AR data where hundreds of empty columns may exist
+        df = df.dropna(axis=1, how='all')
+        # 4. Factor Filtering
+        if facs is not None:
+            clean_facs = [f for f in facs if f != 'date']
+            df = df.reindex(columns=clean_facs)
+        return df
+    except Exception as e:
+        print(f"Error in fmp_cashftsar for {sym}: {e}")
+        return pd.DataFrame()
+#-----------------------------------------------------------------
+
 #-----------------------------------------------------	
 #MOD 2/10/26 7:57AM
 def fmp_cashftsFmt(df):
@@ -3964,7 +4026,7 @@ function exportToExcel() {{
             const text = (cell.innerText || cell.textContent).trim();
             
             // For header row dates, add a tab prefix to prevent auto-formatting
-            if (rowIndex === 0 && colIndex > 0 && /^\d{{4}}-\d{{2}}-\d{{2}}$/.test(text)) {{
+            if (rowIndex === 0 && colIndex > 0 && /^\\d{{4}}-\\d{{2}}-\\d{{2}}$/.test(text)) {{
                 return "\t" + text;  // Tab character prevents date conversion
             }}
             
