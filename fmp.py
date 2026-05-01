@@ -83,9 +83,7 @@ def fmp_price(syms, start='1960-01-01', end=str(dt.datetime.now().date()), facs=
     idx = [sub['date'] for sub in l]
     idx=pd.to_datetime(idx)
     df = pd.DataFrame([[sub[k] for k in facs] for sub in l], columns=facs, index=idx)
-    df = df.iloc[::-1]
-    df = df.loc[start:end]
-    return df
+    return df.iloc[::-1]
 
 
 #-----------------------------------------------------
