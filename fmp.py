@@ -87,6 +87,37 @@ def fmp_price(syms, start='1960-01-01', end=str(dt.datetime.now().date()), facs=
 
 
 #-----------------------------------------------------
+def fmp_priceRaw(syms, start='1960-01-01', end=str(dt.datetime.now().date()), facs=['adjClose']):
+    '''
+    Historical Price - Non-Split-Adjusted (raw) - Single Symbol - Multiple Facs
+    Uses the FMP "stable" historical-price-eod/non-split-adjusted endpoint, which
+    returns prices as actually traded (i.e. NOT adjusted for stock splits).
+    NOTE: this endpoint only supports US exchanges.
+    sym: string for single symbol as in 'SPY' with no []
+    start/end = string like 'YYYY-mm-dd'
+    facs= returns any of: 'adjOpen', 'adjHigh', 'adjLow', 'adjClose', 'volume'
+    with facs as column names. Despite the 'adj' prefix, these are the raw,
+    non-split-adjusted values ('adjClose' is the as-traded closing price).
+    returns: DF with facs as the columns
+    '''
+    url=requote_uri(f'https://financialmodelingprep.com/stable/historical-price-eod/non-split-adjusted?symbol={syms}&from={start}&to={end}&apikey={apikey}')
+    response = urlopen(url, context=ssl_context)
+    data = response.read().decode("utf-8")
+    stuff = json.loads(data)
+
+    # Safety Check: stable endpoint returns a flat list (empty if no data)
+    if not stuff:
+        print(f"Warning: No historical data found for symbol in response.")
+        return pd.DataFrame()  # Return empty DF so the loop can continue
+
+    l = stuff
+    idx = [sub['date'] for sub in l]
+    idx = pd.to_datetime(idx)
+    df = pd.DataFrame([[sub[k] for k in facs] for sub in l], columns=facs, index=idx)
+    return df.iloc[::-1]
+
+
+#-----------------------------------------------------
 #MOD 020826 9:08PM
 def fmp_priceMult(symbols, start_date=None, end_date=None, facs='close'):
     """
@@ -295,11 +326,117 @@ def fmp_priceLoop(syms, start='1960-01-01', end=None, fac='close', supress=True,
         df = pd.concat(results, axis=1)
         df.sort_index(inplace=True)
         return df
-    
+
     return pd.DataFrame()
 #-----------------------------------------------------
 
-def fmp_priceLbk(sym, date,facs=['close']):  
+def fmp_priceRawLoop(syms, start='1960-01-01', end=None, fac='adjClose', supress=True, max_workers=20):
+    """
+    Fetches non-split-adjusted (raw) historical price data for multiple symbols
+    in parallel using the FMP "stable" non-split-adjusted endpoint.
+
+    This is the multi-symbol companion to fmp_priceRaw(), built in the same style
+    as fmp_priceLoop(): it uses a ThreadPoolExecutor to make concurrent API
+    requests and aggregates the results into a single DataFrame where columns
+    correspond to symbols. Prices are as actually traded (i.e. NOT adjusted for
+    stock splits).
+
+    NOTE: the underlying endpoint only supports US exchanges.
+
+    Parameters
+    ----------
+    syms : list of str
+        A list of stock ticker symbols to fetch (e.g., ['AAPL', 'MSFT', 'GOOG']).
+
+    start : str, optional
+        The start date for data retrieval in 'YYYY-MM-DD' format.
+        Default is '1960-01-01'.
+
+    end : str, optional
+        The end date for data retrieval in 'YYYY-MM-DD' format.
+        If None, defaults to the current date.
+
+    fac : str, default 'adjClose'
+        The specific data field to extract for each symbol.
+        Options: 'adjOpen', 'adjHigh', 'adjLow', 'adjClose', 'volume'.
+        Despite the 'adj' prefix, these are the raw, non-split-adjusted values
+        ('adjClose' is the as-traded closing price).
+        Note: The underlying 'fmp_priceRaw' function must support this list format.
+
+    supress : bool, default True
+        If True, suppresses progress bars and error messages for missing data.
+        If False, displays a tqdm progress bar and prints symbols that returned no data.
+
+    max_workers : int, default 20
+        The maximum number of concurrent threads to use for downloading.
+        Higher numbers are faster but may hit API rate limits or cause stability issues.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame indexed by Date (datetime64[ns]).
+        - Columns are labeled with the ticker symbols.
+        - Values correspond to the requested 'fac' (e.g., raw closing prices).
+        - Rows are sorted by date in ascending order.
+        - If no data is found for any symbol, returns an empty DataFrame.
+
+    Examples
+    --------
+    >>> tickers = ['AAPL', 'MSFT', 'NVDA']
+    >>> df = fmp_priceRawLoop(tickers, start='2023-01-01', fac='adjClose')
+    >>> print(df.head())
+    """
+
+    # Handle dynamic default date (today)
+    if end is None:
+        end = str(dt.datetime.now().date())
+
+    # Helper function to run inside threads
+    def fetch_single_symbol(symbol):
+        try:
+            # Calls the existing single-symbol function (must be defined in scope)
+            dff = fmp_priceRaw(symbol, start=start, end=end, facs=[fac])
+
+            if not dff.empty:
+                # Rename the single column to the symbol name for the final merge
+                dff.columns = [symbol]
+                return dff
+            return None
+        except Exception:
+            return None
+
+    results = []
+
+    # execute in parallel using threads
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        futures = {executor.submit(fetch_single_symbol, s): s for s in syms}
+
+        # Determine iterator based on suppression
+        if not supress:
+            iterator = tqdm(concurrent.futures.as_completed(futures), total=len(syms), desc="Fetching Data")
+        else:
+            iterator = concurrent.futures.as_completed(futures)
+
+        # Collect results as they complete
+        for future in iterator:
+            dff = future.result()
+            if dff is not None:
+                results.append(dff)
+            elif not supress:
+                # Retrieve the symbol from the futures dict to print which one failed
+                print(f"No data returned for symbol: {futures[future]}")
+
+    # High-performance merge using concat (vs sequential assignment)
+    if results:
+        df = pd.concat(results, axis=1)
+        df.sort_index(inplace=True)
+        return df
+
+    return pd.DataFrame()
+#-----------------------------------------------------
+
+def fmp_priceLbk(sym, date,facs=['close']):
     '''
     inputs sym: single symbol as a string,
            date: 'YYYY-mm-dd' as a string
