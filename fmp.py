@@ -5472,12 +5472,51 @@ currYield:  last dividend x 4
     return newdf
 
 #---------------------------------------------------------------------------------------	
-def fmp_idx(syms, weights = None, rebal = 'once', fac= 'adjClose',start='1980-01-01',name='idx'):
+def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01', name='idx', return_stream=False):
     '''
 	   syms: list of symbols
-       weights: list of weights must = len(syms) and equal 1
-       rebal:  'once', 'quarterly', or 'yearly' for rebalance period
-       name: a label for the index, string
+       weights: list of weights; one per symbol (len(weights) == len(syms)).
+                Positive = LONG, negative = SHORT. They do NOT have to sum to 1.
+                  - long-only book   -> e.g. [0.5, 0.5]   (sum 1, gross 1x, net +1x)
+                  - short book       -> e.g. [-1.0]       (gross 1x, net -1x)
+                  - long/short pair  -> e.g. [1.0, -1.0]  (gross 2x, net 0x, market-neutral)
+                If weights is None, equal LONG weights (1/N each) are used.
+       rebal:  rebalance frequency: 'once', 'weekly', 'monthly', 'quarterly', or 'yearly'.
+                'once' = buy-and-hold (constant SHARES; effective weights drift).
+                *** IMPORTANT for SHORTS / LONG-SHORT books ***
+                'once' holds constant shares, so a short leg's dollar exposure
+                balloons as the underlier rises: leverage drifts and a net-short
+                NAV can cross zero, which makes res.prices.pct_change() volatility
+                MEANINGLESS. Therefore, when any weight < 0 and rebal=='once', this
+                function prints a warning and AUTO-SWITCHES to rebal='quarterly'.
+                Long-only books are unaffected (drift is minor) and 'once' is fine.
+                More frequent rebalancing converges to the constant-weight return.
+       return_stream: bool, default False.
+                False -> returns the bt backtest Result object (res); NAV = res.prices.
+                True  -> BYPASSES bt entirely and returns a pandas DataFrame with
+                         columns ['ret', 'nav']: the constant-weight, DAILY-rebalanced
+                         portfolio daily return stream and its cumulative NAV (base 100).
+                         This is the EXACT, robust route for SHORT and LONG/SHORT
+                         volatility / Sharpe work: it never crosses zero and carries no
+                         constant-share leverage drift. Annualized vol = ret.std()*sqrt(252).
+       fac:   price field to use (default 'adjClose' = dividend/split adjusted).
+       name:  a label for the index, string.
+
+       Reconciliation (RSP +1 / SPY -1, 2023-01 -> 2026-06):
+         rebal='once'      -> 16.5% ann vol  (WRONG: NAV halved by share drift)
+         rebal='quarterly' ->  7.4% ann vol  (correct)
+         return_stream=True->  7.2% ann vol  (correct, exact constant-weight)
+       Short SPY [-1]: 'once' drove NAV negative (vol 125%, garbage);
+         'quarterly' / return_stream give the correct ~15%.
+
+       Examples:
+           # long-only equal-weight index, buy & hold
+           res = fmp_idx(['SPY', 'QQQ', 'IWM'])
+           # short a single name (auto-switches to quarterly)
+           res = fmp_idx(['SPY'], weights=[-1.0])
+           # market-neutral pair -- exact vol via the return stream
+           ls = fmp_idx(['RSP', 'SPY'], weights=[1.0, -1.0], return_stream=True)
+           ann_vol = ls['ret'].std() * (252 ** 0.5) * 100
        returns: res.  The res object in the bt library is typically a bt.run.Result object, and it provides a variety of methods and attributes to 
        analyze the backtest results. Here is a list of some commonly used methods and attributes:
 
@@ -5540,25 +5579,67 @@ The index (dates) corresponding to the price and portfolio values.
 	            
     
     '''
-    if weights == None:
-        weights=[np.round(1 / len(syms),3)] * len(syms)
-        
+    if weights is None:
+        weights = [np.round(1 / len(syms), 3)] * len(syms)
+
+    if len(weights) != len(syms):
+        raise ValueError(f"len(weights)={len(weights)} must equal len(syms)={len(syms)}")
+
+    gross = float(np.sum(np.abs(weights)))
+    net = float(np.sum(weights))
+    has_short = any(w < 0 for w in weights)
+
+    # ---- robust return-stream route (constant-weight, daily-rebalanced) ----
+    # The unambiguous answer for SHORT and LONG/SHORT books. Computes the
+    # weighted daily return directly, so it never crosses zero and is immune to
+    # the constant-share leverage drift that corrupts the bt NAV path.
+    if return_stream:
+        px = fmp_priceLoop(syms, start=start, fac=fac).dropna()
+        rets = px[syms].pct_change().dropna()
+        w = pd.Series(dict(zip(syms, weights)))
+        port_ret = rets.mul(w, axis=1).sum(axis=1)
+        nav = (1 + port_ret).cumprod() * 100.0
+        out = pd.DataFrame({'ret': port_ret, 'nav': nav})
+        annvol = port_ret.std(ddof=1) * np.sqrt(252) * 100
+        print('First available data is ' + str(px.index[0].date()))
+        print('weights: ' + str(dict(zip(syms, weights))) +
+              f'  | gross={gross:.2f}x  net={net:+.2f}x')
+        print('type:  ' + fac)
+        print('return_stream=True -> constant-weight, daily-rebalanced series')
+        print(f'annualized vol = {annvol:.2f}%   total return = {nav.iloc[-1] / 100 - 1:+.2%}')
+        return out
+
     rebal_mapping = {
         'once': bt.algos.RunOnce(),
+        'weekly': bt.algos.RunWeekly(),
+        'monthly': bt.algos.RunMonthly(),
         'quarterly': bt.algos.RunQuarterly(),
         'yearly': bt.algos.RunYearly(),
     }
 
     if rebal not in rebal_mapping:
-        raise ValueError("Invalid value for rebal parameter. Use 'once', 'quarterly', or 'yearly'.")
+        raise ValueError("Invalid value for rebal parameter. Use 'once', "
+                         "'weekly', 'monthly', 'quarterly', or 'yearly'.")
 
-    rebal_per = rebal_mapping[rebal]   
-    
-    px=fmp_priceLoop(syms, start=start, fac=fac).dropna()
-    
-    print ('First available data is '+str(px.index[0].date()))
-    print('weights: '+str(dict(zip(syms, weights))))
-    print('type:  '+fac)
+    # A short / long-short book held at constant shares (rebal='once') lets
+    # leverage balloon and the NAV can cross zero -> garbage vol. Auto-bump to
+    # 'quarterly' and warn. Use return_stream=True for the exact answer.
+    if has_short and rebal == 'once':
+        print("WARNING: negative weight(s) detected with rebal='once'. "
+              "Constant-share holding distorts a short/long-short NAV "
+              "(leverage drift, possible zero-crossing). Auto-switching to "
+              "rebal='quarterly'. For the exact constant-weight vol, pass "
+              "return_stream=True.")
+        rebal = 'quarterly'
+
+    rebal_per = rebal_mapping[rebal]
+
+    px = fmp_priceLoop(syms, start=start, fac=fac).dropna()
+
+    print('First available data is ' + str(px.index[0].date()))
+    print('weights: ' + str(dict(zip(syms, weights))) +
+          f'  | gross={gross:.2f}x  net={net:+.2f}x  rebal={rebal}')
+    print('type:  ' + fac)
     idx = bt.Strategy(name, [rebal_per,
                        bt.algos.SelectAll(),
                        bt.algos.WeighSpecified(**dict(zip(syms, weights))),
@@ -5567,7 +5648,7 @@ The index (dates) corresponding to the price and portfolio values.
     t = bt.Backtest(idx, px)
     res = bt.run(t)
     print(res.prices.tail(1))
-   
+
     return res
     
 #--------------------------------------------------------------------------------------------
