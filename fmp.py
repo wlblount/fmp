@@ -5472,15 +5472,36 @@ currYield:  last dividend x 4
     return newdf
 
 #---------------------------------------------------------------------------------------	
-def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01', name='idx', return_stream=False):
+def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01', name='idx', return_stream=False, end=None):
     '''
-	   syms: list of symbols
-       weights: list of weights; one per symbol (len(weights) == len(syms)).
-                Positive = LONG, negative = SHORT. They do NOT have to sum to 1.
-                  - long-only book   -> e.g. [0.5, 0.5]   (sum 1, gross 1x, net +1x)
-                  - short book       -> e.g. [-1.0]       (gross 1x, net -1x)
-                  - long/short pair  -> e.g. [1.0, -1.0]  (gross 2x, net 0x, market-neutral)
-                If weights is None, equal LONG weights (1/N each) are used.
+	   syms: list of symbols (no duplicates)
+       weights: list of DOLLAR EXPOSURES per $1.00 of starting capital; one per
+                symbol (len(weights) == len(syms)). If None, equal LONG
+                weights (1/N each) are used.
+
+                HOW TO READ A WEIGHT
+                  sign      -> direction: positive = LONG, negative = SHORT
+                  magnitude -> size: dollars of exposure per $1 of capital.
+                               0.50 = half the capital, 1.00 = fully invested,
+                               2.00 = 2x levered (i.e. borrowed) exposure.
+                Weights do NOT have to sum to 1. Two numbers describe any book:
+                  sum(|w|) = GROSS exposure = leverage
+                  sum(w)   = NET exposure   = market direction
+                (both are printed on every run)
+
+                COOKBOOK
+                  [0.5, 0.5]    long-only, fully invested   (gross 1.0x, net +1.0x)
+                  [0.4, 0.4]    long-only, 20% in cash      (gross 0.8x, net +0.8x)
+                  [-1.0]        short 1x                    (gross 1.0x, net -1.0x)
+                  [1.0, -1.0]   market-neutral pair         (gross 2.0x, net  0.0x)
+                  [1.3, -0.3]   130/30 book                 (gross 1.6x, net +1.0x)
+                  [2.0]         2x levered long             (gross 2.0x, net +2.0x)
+                  [1.5, -0.5]   levered long/short tilt     (gross 2.0x, net +1.0x)
+
+                In the bt route, weights summing to <1 leave the remainder in
+                cash; summing to >1 implies borrowing. NEITHER route models
+                financing, borrow fees, or margin costs -- levered and short
+                results are gross of those.
        rebal:  rebalance frequency: 'once', 'weekly', 'monthly', 'quarterly', or 'yearly'.
                 'once' = buy-and-hold (constant SHARES; effective weights drift).
                 *** IMPORTANT for SHORTS / LONG-SHORT books ***
@@ -5500,6 +5521,10 @@ def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01'
                          volatility / Sharpe work: it never crosses zero and carries no
                          constant-share leverage drift. Annualized vol = ret.std()*sqrt(252).
        fac:   price field to use (default 'adjClose' = dividend/split adjusted).
+       start: start date 'YYYY-MM-DD' (data begins at the latest common first
+              date across syms if later than this).
+       end:   end date 'YYYY-MM-DD'; None (default) = today. Set start AND end
+              to study a historical window (e.g. 2022 only).
        name:  a label for the index, string.
 
        Reconciliation (RSP +1 / SPY -1, 2023-01 -> 2026-06):
@@ -5579,8 +5604,13 @@ The index (dates) corresponding to the price and portfolio values.
 	            
     
     '''
+    if len(set(syms)) != len(syms):
+        dupes = sorted({s for s in syms if syms.count(s) > 1})
+        raise ValueError(f"duplicate symbol(s) in syms: {dupes} -- weights are "
+                         "mapped by symbol name, so duplicates would silently collapse")
+
     if weights is None:
-        weights = [np.round(1 / len(syms), 3)] * len(syms)
+        weights = [1.0 / len(syms)] * len(syms)
 
     if len(weights) != len(syms):
         raise ValueError(f"len(weights)={len(weights)} must equal len(syms)={len(syms)}")
@@ -5588,25 +5618,35 @@ The index (dates) corresponding to the price and portfolio values.
     gross = float(np.sum(np.abs(weights)))
     net = float(np.sum(weights))
     has_short = any(w < 0 for w in weights)
+    w_disp = {s: round(w, 4) for s, w in zip(syms, weights)}  # display only; math uses full precision
 
     # ---- robust return-stream route (constant-weight, daily-rebalanced) ----
     # The unambiguous answer for SHORT and LONG/SHORT books. Computes the
     # weighted daily return directly, so it never crosses zero and is immune to
     # the constant-share leverage drift that corrupts the bt NAV path.
     if return_stream:
-        px = fmp_priceLoop(syms, start=start, fac=fac).dropna()
+        px = fmp_priceLoop(syms, start=start, end=end, fac=fac).dropna()
+        missing = [s for s in syms if s not in px.columns]
+        if missing:
+            raise ValueError(f"no price data returned for: {missing} -- check "
+                             "ticker spelling / FMP coverage")
         rets = px[syms].pct_change().dropna()
         w = pd.Series(dict(zip(syms, weights)))
         port_ret = rets.mul(w, axis=1).sum(axis=1)
         nav = (1 + port_ret).cumprod() * 100.0
         out = pd.DataFrame({'ret': port_ret, 'nav': nav})
         annvol = port_ret.std(ddof=1) * np.sqrt(252) * 100
-        print('First available data is ' + str(px.index[0].date()))
-        print('weights: ' + str(dict(zip(syms, weights))) +
+        yrs = len(port_ret) / 252
+        cagr = (nav.iloc[-1] / 100.0) ** (1 / yrs) - 1 if yrs > 0 else np.nan
+        sharpe = port_ret.mean() / port_ret.std(ddof=1) * np.sqrt(252) if port_ret.std(ddof=1) > 0 else np.nan
+        print('First available data is ' + str(px.index[0].date()) +
+              '  |  last: ' + str(px.index[-1].date()))
+        print('weights: ' + str(w_disp) +
               f'  | gross={gross:.2f}x  net={net:+.2f}x')
         print('type:  ' + fac)
         print('return_stream=True -> constant-weight, daily-rebalanced series')
-        print(f'annualized vol = {annvol:.2f}%   total return = {nav.iloc[-1] / 100 - 1:+.2%}')
+        print(f'annualized vol = {annvol:.2f}%   total return = {nav.iloc[-1] / 100 - 1:+.2%}   '
+              f'CAGR = {cagr:+.2%}   Sharpe (rf=0) = {sharpe:.2f}')
         return out
 
     rebal_mapping = {
@@ -5634,10 +5674,14 @@ The index (dates) corresponding to the price and portfolio values.
 
     rebal_per = rebal_mapping[rebal]
 
-    px = fmp_priceLoop(syms, start=start, fac=fac).dropna()
+    px = fmp_priceLoop(syms, start=start, end=end, fac=fac).dropna()
+    missing = [s for s in syms if s not in px.columns]
+    if missing:
+        raise ValueError(f"no price data returned for: {missing} -- check "
+                         "ticker spelling / FMP coverage")
 
     print('First available data is ' + str(px.index[0].date()))
-    print('weights: ' + str(dict(zip(syms, weights))) +
+    print('weights: ' + str(w_disp) +
           f'  | gross={gross:.2f}x  net={net:+.2f}x  rebal={rebal}')
     print('type:  ' + fac)
     idx = bt.Strategy(name, [rebal_per,
