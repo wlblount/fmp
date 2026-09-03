@@ -22,7 +22,18 @@ import datetime as dt
 import json
 import re
 import logging
-logging.captureWarnings(True)
+import warnings
+# Quiet known third-party warning spam WITHOUT hiding warnings process-wide.
+# This used to be logging.captureWarnings(True), which -- with no logging
+# handler configured -- silently discarded EVERY warnings.warn in the process,
+# including the caller's own. Add further targeted filters here if new noise
+# appears; do not reinstate the blanket capture.
+try:
+    from pandas.errors import ChainedAssignmentError as _ChainedAssignmentError
+    # bt.backtest rebalances via chained assignment; harmless, fires every run.
+    warnings.filterwarnings('ignore', category=_ChainedAssignmentError, module=r'bt(\.|$)')
+except ImportError:
+    pass
 from collections import defaultdict
 from urllib.request import urlopen
 from urllib.parse import urlencode
@@ -5679,8 +5690,9 @@ def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01'
     # leverage balloon and the NAV can cross zero -> garbage vol. Auto-bump to
     # 'quarterly' and warn. Use return_stream=True for the exact answer.
     # This changes the math, so it is emitted through logging (stderr) and is
-    # NOT gated by verbose. (warnings.warn is unusable here: the module-level
-    # logging.captureWarnings(True) swallows it when no handler is configured.)
+    # NOT gated by verbose. Logging rather than warnings.warn so it fires on
+    # EVERY affected run instead of once per location, and is immune to the
+    # caller's warnings filters.
     if has_short and rebal == 'once':
         logging.getLogger(__name__).warning(
             "fmp_idx: negative weight(s) detected with rebal='once'. "
