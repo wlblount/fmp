@@ -5472,9 +5472,9 @@ currYield:  last dividend x 4
     return newdf
 
 #---------------------------------------------------------------------------------------	
-def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01', name='idx', return_stream=False, end=None):
+def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01', name='idx', return_stream=False, end=None, verbose=True):
     '''
-	   syms: list of symbols (no duplicates)
+       syms: list of symbols (no duplicates)
        weights: list of DOLLAR EXPOSURES per $1.00 of starting capital; one per
                 symbol (len(weights) == len(syms)). If None, equal LONG
                 weights (1/N each) are used.
@@ -5509,23 +5509,33 @@ def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01'
                 balloons as the underlier rises: leverage drifts and a net-short
                 NAV can cross zero, which makes res.prices.pct_change() volatility
                 MEANINGLESS. Therefore, when any weight < 0 and rebal=='once', this
-                function prints a warning and AUTO-SWITCHES to rebal='quarterly'.
+                function logs a WARNING to stderr (NOT silenced by verbose=False or
+                redirect_stdout) and AUTO-SWITCHES to rebal='quarterly'.
+                Detect it programmatically via res.rebal == 'quarterly'.
                 Long-only books are unaffected (drift is minor) and 'once' is fine.
                 More frequent rebalancing converges to the constant-weight return.
        return_stream: bool, default False.
                 False -> returns the bt backtest Result object (res); NAV = res.prices.
                 True  -> BYPASSES bt entirely and returns a pandas DataFrame with
-                         columns ['ret', 'nav']: the constant-weight, DAILY-rebalanced
-                         portfolio daily return stream and its cumulative NAV (base 100).
+                         columns ['nav', 'ret'] (NAV FIRST):
+                           nav: constant-weight, DAILY-rebalanced NAV, base 100.
+                                Row 0 is the first price date at exactly 100.0, so
+                                nav.iloc[-1] / nav.iloc[0] - 1 is the total return.
+                           ret: the daily portfolio return (row 0 is 0.0).
                          This is the EXACT, robust route for SHORT and LONG/SHORT
                          volatility / Sharpe work: it never crosses zero and carries no
-                         constant-share leverage drift. Annualized vol = ret.std()*sqrt(252).
+                         constant-share leverage drift.
+                         Annualized vol = ret.iloc[1:].std() * sqrt(252).
        fac:   price field to use (default 'adjClose' = dividend/split adjusted).
        start: start date 'YYYY-MM-DD' (data begins at the latest common first
-              date across syms if later than this).
+              date across syms if later than this -- see effective_start below).
        end:   end date 'YYYY-MM-DD'; None (default) = today. Set start AND end
               to study a historical window (e.g. 2022 only).
        name:  a label for the index, string.
+       verbose: bool, default True. Print the run summary (first/last date,
+              weights, gross/net, type, final row). Pass False when looping over
+              many baskets. Errors and the short/'once' auto-switch warning are
+              never silenced.
 
        Reconciliation (RSP +1 / SPY -1, 2023-01 -> 2026-06):
          rebal='once'      -> 16.5% ann vol  (WRONG: NAV halved by share drift)
@@ -5541,68 +5551,51 @@ def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01'
            res = fmp_idx(['SPY'], weights=[-1.0])
            # market-neutral pair -- exact vol via the return stream
            ls = fmp_idx(['RSP', 'SPY'], weights=[1.0, -1.0], return_stream=True)
-           ann_vol = ls['ret'].std() * (252 ** 0.5) * 100
-       returns: res.  The res object in the bt library is typically a bt.run.Result object, and it provides a variety of methods and attributes to 
-       analyze the backtest results. Here is a list of some commonly used methods and attributes:
+           ann_vol = ls['ret'].iloc[1:].std() * (252 ** 0.5) * 100
+           # quiet loop over many baskets
+           for b in baskets:
+               r = fmp_idx(b, start='2024-01-01', return_stream=True, verbose=False)
 
-Methods
-res.display()
+       RUN METADATA (both routes) -- assert on these instead of parsing stdout:
+           effective_start: pd.Timestamp of the first REAL price bar used
+                            (the latest common first date across syms).
+           effective_end:   pd.Timestamp of the last price bar used.
+           syms, weights:   the constituent list and the weights actually applied.
+         bt route:          plain attributes -> res.effective_start, res.syms, ...
+         return_stream:     DataFrame.attrs  -> df.attrs['effective_start'], ...
+         NOTE (bt route): bt prepends a synthetic base-100 row dated one CALENDAR
+         day before the first price bar, so res.prices.index[0] can be a
+         weekend. res.effective_start == res.prices.index[1] is the first
+         trading day.
 
-Displays a summary of the performance statistics (e.g., total return, Sharpe ratio, max drawdown, etc.).
-res.plot()
-
-Plots the equity curve of the strategy and possibly other metrics depending on options passed.
-res.prices
-
-Returns the price series used in the backtest for each asset in the portfolio.
-res.weights
-
-Returns a DataFrame of the weights assigned to each asset over time.
-res.stats
-
-Returns a list of the performance statistics and other information related to the backtest.
-res.get_transactions()
-
-Returns a DataFrame with all the transactions executed during the backtest.
-res.get_security_weights()
-
-Returns a dictionary with weights for each security in the portfolio over time.
-res.prices.plot()
-
-Plots the price series (if you want to inspect the prices used in the backtest).
-res.get_security_returns()
-
-Returns the individual security returns.
-Attributes
-res.strategy
-
-Provides access to the strategy used in the backtest, which allows you to inspect or modify it.
-res.stats
-
-The performance metrics of the strategy, often displayed in a summary format via display().
-res.perf
-
-The time series of the portfolio's performance over the backtest period.
-res.assets
-
-A list of assets that were included in the backtest.
-res.rets
-
-The portfolio’s returns as a time series (returns from one time period to the next).
-res.prices
-
-The prices of the assets in the portfolio over time.
-res.security_weights
-
-A DataFrame showing the portfolio’s weights in individual assets over time.
-res.benchmark
-
-If a benchmark was specified, this will contain benchmark performance data.
-res.prices.index
-
-The index (dates) corresponding to the price and portfolio values.
-	            
-    
+       returns (return_stream=False): a bt.backtest.Result (bt 1.2.x). It is a
+       dict subclass keyed by strategy name. The REAL surface is:
+         Attributes
+           res.prices            DataFrame, one column (name) = index NAV, base 100
+           res.stats             DataFrame of performance stats (CAGR, vol, Sharpe,
+                                 max drawdown, ...); res.stats[name] for the Series
+           res.lookback_returns  DataFrame of trailing-window returns
+           res.backtests         {name: bt.Backtest}; res.backtests[name].strategy
+                                 exposes the underlying strategy object
+           res.backtest_list     same, as a list
+         Methods
+           res.display()                  print the stats table
+           res.display_lookback_returns()
+           res.display_monthly_returns()
+           res.plot()                     equity curve
+           res.plot_weights()             weights over time
+           res.plot_security_weights()
+           res.plot_histograms()
+           res.get_security_weights()     DataFrame of per-security weights by date
+           res.get_weights()
+           res.get_transactions()         DataFrame of every fill
+           res.set_date_range(start, end)
+           res.set_riskfree_rate(rf)
+           res.to_csv(path)
+       Daily portfolio returns: res.prices[name].pct_change()
+       Constituents:            list(res.get_security_weights().columns) or res.syms
+       There is NO res.perf, res.rets, res.assets, res.benchmark,
+       res.security_weights, or res.strategy on this object.
     '''
     if len(set(syms)) != len(syms):
         dupes = sorted({s for s in syms if syms.count(s) > 1})
@@ -5615,10 +5608,16 @@ The index (dates) corresponding to the price and portfolio values.
     if len(weights) != len(syms):
         raise ValueError(f"len(weights)={len(weights)} must equal len(syms)={len(syms)}")
 
+    syms = list(syms)
+    weights = [float(w) for w in weights]
     gross = float(np.sum(np.abs(weights)))
     net = float(np.sum(weights))
     has_short = any(w < 0 for w in weights)
     w_disp = {s: round(w, 4) for s, w in zip(syms, weights)}  # display only; math uses full precision
+
+    def _say(msg):
+        if verbose:
+            print(msg)
 
     # ---- robust return-stream route (constant-weight, daily-rebalanced) ----
     # The unambiguous answer for SHORT and LONG/SHORT books. Computes the
@@ -5633,20 +5632,35 @@ The index (dates) corresponding to the price and portfolio values.
         rets = px[syms].pct_change().dropna()
         w = pd.Series(dict(zip(syms, weights)))
         port_ret = rets.mul(w, axis=1).sum(axis=1)
+        # Base row: first price date at nav=100 / ret=0 so that
+        # nav.iloc[-1]/nav.iloc[0]-1 is the true total return and the calendar
+        # lines up with the bt route's first real bar.
+        port_ret = pd.concat([pd.Series([0.0], index=[px.index[0]]), port_ret])
         nav = (1 + port_ret).cumprod() * 100.0
-        out = pd.DataFrame({'ret': port_ret, 'nav': nav})
-        annvol = port_ret.std(ddof=1) * np.sqrt(252) * 100
-        yrs = len(port_ret) / 252
+        out = pd.DataFrame({'nav': nav, 'ret': port_ret})
+        out.index.name = px.index.name
+        out.attrs.update({
+            'name': name,
+            'effective_start': px.index[0],
+            'effective_end': px.index[-1],
+            'syms': syms,
+            'weights': weights,
+            'fac': fac,
+            'route': 'return_stream',
+        })
+        r = port_ret.iloc[1:]
+        annvol = r.std(ddof=1) * np.sqrt(252) * 100
+        yrs = len(r) / 252
         cagr = (nav.iloc[-1] / 100.0) ** (1 / yrs) - 1 if yrs > 0 else np.nan
-        sharpe = port_ret.mean() / port_ret.std(ddof=1) * np.sqrt(252) if port_ret.std(ddof=1) > 0 else np.nan
-        print('First available data is ' + str(px.index[0].date()) +
-              '  |  last: ' + str(px.index[-1].date()))
-        print('weights: ' + str(w_disp) +
-              f'  | gross={gross:.2f}x  net={net:+.2f}x')
-        print('type:  ' + fac)
-        print('return_stream=True -> constant-weight, daily-rebalanced series')
-        print(f'annualized vol = {annvol:.2f}%   total return = {nav.iloc[-1] / 100 - 1:+.2%}   '
-              f'CAGR = {cagr:+.2%}   Sharpe (rf=0) = {sharpe:.2f}')
+        sharpe = r.mean() / r.std(ddof=1) * np.sqrt(252) if r.std(ddof=1) > 0 else np.nan
+        _say('First available data is ' + str(px.index[0].date()) +
+             '  |  last: ' + str(px.index[-1].date()))
+        _say('weights: ' + str(w_disp) +
+             f'  | gross={gross:.2f}x  net={net:+.2f}x')
+        _say('type:  ' + fac)
+        _say('return_stream=True -> constant-weight, daily-rebalanced series')
+        _say(f'annualized vol = {annvol:.2f}%   total return = {nav.iloc[-1] / 100 - 1:+.2%}   '
+             f'CAGR = {cagr:+.2%}   Sharpe (rf=0) = {sharpe:.2f}')
         return out
 
     rebal_mapping = {
@@ -5664,12 +5678,16 @@ The index (dates) corresponding to the price and portfolio values.
     # A short / long-short book held at constant shares (rebal='once') lets
     # leverage balloon and the NAV can cross zero -> garbage vol. Auto-bump to
     # 'quarterly' and warn. Use return_stream=True for the exact answer.
+    # This changes the math, so it is emitted through logging (stderr) and is
+    # NOT gated by verbose. (warnings.warn is unusable here: the module-level
+    # logging.captureWarnings(True) swallows it when no handler is configured.)
     if has_short and rebal == 'once':
-        print("WARNING: negative weight(s) detected with rebal='once'. "
-              "Constant-share holding distorts a short/long-short NAV "
-              "(leverage drift, possible zero-crossing). Auto-switching to "
-              "rebal='quarterly'. For the exact constant-weight vol, pass "
-              "return_stream=True.")
+        logging.getLogger(__name__).warning(
+            "fmp_idx: negative weight(s) detected with rebal='once'. "
+            "Constant-share holding distorts a short/long-short NAV "
+            "(leverage drift, possible zero-crossing). Auto-switching to "
+            "rebal='quarterly'. For the exact constant-weight vol, pass "
+            "return_stream=True.")
         rebal = 'quarterly'
 
     rebal_per = rebal_mapping[rebal]
@@ -5680,18 +5698,27 @@ The index (dates) corresponding to the price and portfolio values.
         raise ValueError(f"no price data returned for: {missing} -- check "
                          "ticker spelling / FMP coverage")
 
-    print('First available data is ' + str(px.index[0].date()))
-    print('weights: ' + str(w_disp) +
-          f'  | gross={gross:.2f}x  net={net:+.2f}x  rebal={rebal}')
-    print('type:  ' + fac)
+    _say('First available data is ' + str(px.index[0].date()) +
+         '  |  last: ' + str(px.index[-1].date()))
+    _say('weights: ' + str(w_disp) +
+         f'  | gross={gross:.2f}x  net={net:+.2f}x  rebal={rebal}')
+    _say('type:  ' + fac)
     idx = bt.Strategy(name, [rebal_per,
                        bt.algos.SelectAll(),
                        bt.algos.WeighSpecified(**dict(zip(syms, weights))),
                        bt.algos.Rebalance()])
-    print('Creating Index')
+    _say('Creating Index')
     t = bt.Backtest(idx, px)
     res = bt.run(t)
-    print(res.prices.tail(1))
+    # Run metadata (bt.Result is a dict subclass; plain attributes are fine).
+    res.name = name
+    res.effective_start = px.index[0]
+    res.effective_end = px.index[-1]
+    res.syms = syms
+    res.weights = weights
+    res.rebal = rebal
+    res.fac = fac
+    _say(res.prices.tail(1))
 
     return res
     
