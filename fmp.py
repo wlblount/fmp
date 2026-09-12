@@ -13,7 +13,6 @@ import time
 import certifi
 import ssl
 ssl_context = ssl.create_default_context(cafile=certifi.where())
-import ffn
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -41,14 +40,79 @@ import requests
 from datetime import datetime, timedelta
 from tqdm import notebook, tqdm
 from requests.utils import requote_uri
-from sklearn.preprocessing import StandardScaler
 from matplotlib.ticker import FormatStrFormatter
 from IPython.display import display, HTML
 import os
-import bt
 import webbrowser
 
 from tvDatafeed import TvDatafeed, Interval
+
+# ffn, bt and sklearn are imported lazily, inside the three functions that
+# actually use them (fmp_perfStats, fmp_idx, fmp_scaler). They are heavy, and
+# ffn/bt both drag in sklearn.linear_model. At module scope a single blocked DLL
+# took down `import fmp` entirely, breaking unrelated callers such as the price
+# fetchers. Keep it that way: do not hoist these back up here.
+
+
+def _load_ffn_bt(which='ffn'):
+    """
+    Import ffn (or bt) on machines where sklearn's SGD extension is blocked.
+
+    ffn imports sklearn.cluster, which chains through neighbors -> decomposition
+    -> linear_model -> _sgd_fast -> sklearn.utils._weight_vector. On a box with
+    WDAC / Application Control enforced, that last .pyd is refused by policy and
+    the whole chain dies -- taking ffn, and therefore bt, with it.
+
+    Nothing in ffn or bt uses the blocked code. _sgd_fast backs only the SGD
+    estimators (SGDClassifier, SGDRegressor, Perceptron, PassiveAggressive);
+    ffn wants sklearn.cluster.KMeans, and bt just wants ffn. So when -- and only
+    when -- the real module refuses to load, we register a stand-in for it so
+    the import chain can complete. The stand-in raises if anything ever actually
+    reaches for an SGD symbol, so this cannot silently return wrong numbers: it
+    buys back the import, not the functionality.
+
+    Returns the requested module. Raises ImportError with the original policy
+    message if the failure is anything other than the known SGD block.
+    """
+    import importlib
+    import sys
+    import types
+
+    sgd = 'sklearn.linear_model._sgd_fast'
+    if sgd not in sys.modules:
+        try:
+            importlib.import_module(sgd)
+        except ImportError as exc:
+            # Only paper over the known Application Control block. Any other
+            # ImportError (missing sklearn, bad build) must surface as itself.
+            if 'DLL load failed' not in str(exc):
+                raise
+
+            class _BlockedSGD:
+                """Placeholder for an sklearn SGD symbol blocked by policy."""
+
+                def __init__(self, *args, **kwargs):
+                    raise ImportError(
+                        "sklearn's SGD estimators are unavailable on this "
+                        "machine: Application Control blocks "
+                        "sklearn/utils/_weight_vector.pyd. fmp.py stubs that "
+                        "module so ffn/bt can import; nothing in fmp.py uses "
+                        "SGD, so reaching this means a new caller does."
+                    )
+
+            def _stub_getattr(name):
+                # Dunders must still raise AttributeError: answering __path__
+                # or __spec__ with a class would make importlib mistake the
+                # stub for a package.
+                if name.startswith('__') and name.endswith('__'):
+                    raise AttributeError(name)
+                return _BlockedSGD
+
+            stub = types.ModuleType(sgd)
+            stub.__getattr__ = _stub_getattr
+            sys.modules[sgd] = stub
+
+    return importlib.import_module(which)
 # Delay slow imports
 def load_utils():
     import utils
@@ -5422,6 +5486,8 @@ def fmp_ticker(sym):
 #---------------------------------------------------------------------------------------
 
 def fmp_scaler(df, names=None):
+    from sklearn.preprocessing import StandardScaler  # lazy: see import note at top of module
+
     df_scaled=pd.DataFrame(StandardScaler().fit_transform(df), 
                 columns=names, 
                 index=df.index)
@@ -5704,6 +5770,10 @@ def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01'
         _say(f'annualized vol = {annvol:.2f}%   total return = {nav.iloc[-1] / 100 - 1:+.2%}   '
              f'CAGR = {cagr:+.2%}   Sharpe (rf=0) = {sharpe:.2f}')
         return out
+
+    # Only the bt route needs bt; the return_stream route above has already
+    # returned, so it stays importable on boxes where bt/sklearn are blocked.
+    bt = _load_ffn_bt('bt')  # lazy: see import note at top of module
 
     rebal_mapping = {
         'once': bt.algos.RunOnce(),
@@ -6985,6 +7055,8 @@ def fmp_perfStats(s):
     outputs: ab object displaying performance stats
     uses ffn package
     '''
+    ffn = _load_ffn_bt('ffn')  # lazy: see import note at top of module
+
     stats = ffn.calc_stats(s)
 
 # Display performance metrics
