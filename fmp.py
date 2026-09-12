@@ -38,7 +38,7 @@ from collections import defaultdict
 from urllib.request import urlopen
 from urllib.parse import urlencode
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from tqdm import notebook, tqdm
 from requests.utils import requote_uri
 from sklearn.preprocessing import StandardScaler
@@ -53,6 +53,37 @@ from tvDatafeed import TvDatafeed, Interval
 def load_utils():
     import utils
     return utils
+
+
+def ddelt(d, start=None):
+    """
+    Return the date `d` US business days back as a 'YYYY-MM-DD' string.
+
+    Counts backward over weekdays, skipping US federal holidays, with the
+    most recent business day on or before `start` counted as day 1. So
+    ddelt(1) is today (or the last business day if today is a weekend or
+    holiday) and ddelt(60) is roughly three calendar months back -- the
+    right lookback to hand fmp_price/fmp_priceLoop when you want ~d rows.
+
+    Parameters
+    ----------
+    d : int
+        Number of business days to look back (>= 1).
+    start : str or Timestamp, optional
+        Reference date ('YYYY-MM-DD'). Defaults to today.
+
+    Notes
+    -----
+    Replaces the old `utils.ddelt` dependency (sibling utils-repo) so fmp.py
+    is self-contained.
+    """
+    from pandas.tseries.holiday import USFederalHolidayCalendar
+    from pandas.tseries.offsets import CustomBusinessDay
+    if d < 1:
+        raise ValueError("d must be >= 1")
+    end = pd.Timestamp.today().normalize() if start is None else pd.Timestamp(start)
+    bday_us = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+    return pd.date_range(end=end, periods=d, freq=bday_us)[0].strftime('%Y-%m-%d')
 
 
 # Get the API key from the environment variable
@@ -5941,8 +5972,8 @@ def fmp_cormatrix(syms, start=60):
               the two symbols.
 
     Notes:
-        - Requires `fmp_priceLoop` (assumed to fetch price data) and `utils.ddelt` 
-          (assumed to compute a date offset) to be defined elsewhere.
+        - Uses `fmp_priceLoop` to fetch prices and the module-level `ddelt`
+          helper to compute the business-day lookback.
         - Assumes price data in `df` is a pandas DataFrame with symbols as columns and
           dates as rows.
         - Log returns are calculated as the difference of the natural logarithm of prices,
@@ -5955,7 +5986,7 @@ def fmp_cormatrix(syms, start=60):
         >>> fmp_cormatrix(['AAPL', 'MSFT'])
         0.75  # Example correlation coefficient
     """
-    df = fmp_priceLoop(syms, start=utils.ddelt(start + 2))
+    df = fmp_priceLoop(syms, start=ddelt(start + 2))
     log_returns_df = np.log(df).diff().dropna()
 
     if len(syms) > 2:
@@ -6148,12 +6179,12 @@ def fmp_2SymReg(sym_a, sym_b, start='1960-01-01', end=str(dt.datetime.now().date
 #-----------------------------------------------------------------------------------------------------
 
 def fmp_stoch(sym,length=8, smooth=3):
-    df=fmp_price(sym, facs=['low', 'high', 'close'], start=tdelt(length+3))
+    df=fmp_price(sym, facs=['low', 'high', 'close'], start=ddelt(length+3))
     df['highest'] = df.high.rolling(length).max()
     df['lowest'] = df.low.rolling(length).min()
     df['k'] = 100*(df.close-df.lowest) / (df.highest-df.lowest)
     df['k_smooth'] = df.k.rolling(smooth).mean()
-    return np.round(df.k_smooth[-1],2)
+    return np.round(df.k_smooth.iloc[-1],2)
 
 #------------------------------------------------------------------------------------------------------
 def fmp_rsi(sym, periods = 3, watch=True, start='1990-01-01'):
@@ -6161,7 +6192,7 @@ def fmp_rsi(sym, periods = 3, watch=True, start='1990-01-01'):
     Returns a pd.Series with the relative strength index.
     """
     if watch:
-        df=fmp_price(sym, facs=['close'], start=utils.ddelt(periods+5))
+        df=fmp_price(sym, facs=['close'], start=ddelt(periods+5))
     
         close_delta = df.diff()
 
@@ -6179,7 +6210,7 @@ def fmp_rsi(sym, periods = 3, watch=True, start='1990-01-01'):
         rsi = 100 - (100/(1 + rsi))
        
 
-        return np.round(rsi.close[-1],2)
+        return np.round(rsi.close.iloc[-1],2)
     
     else:
         df=fmp_price(sym, facs=['close'], start=start)
