@@ -5849,6 +5849,10 @@ Inputs: cik# as a string
 Output: top 40 holdings df of date of report, symbol, position size in shares 
         and dollars, % of position, and calculated price
 		and sorted by position percentage
+
+LIMITS: the v3 endpoint has no putCall field (puts/calls read as longs) and
+        this keeps one row per ticker when a CUSIP is filed on several lines.
+        For put/call-aware, aggregated data use BWScrape/edgar_13f.py + db13f.
         
     '''
     
