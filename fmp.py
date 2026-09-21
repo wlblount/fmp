@@ -551,7 +551,7 @@ def fmp_priceLbk(sym, date,facs=['close']):
            "vwap", "label", "changeOverTime"
            
     '''
-    url= f"https://financialmodelingprep.com/api/v3/historical-price-full/{sym}?from={date}&to={date}&apikey=deb84eb89cd5f862f8f3216ea4d44719"
+    url= f"https://financialmodelingprep.com/api/v3/historical-price-full/{sym}?from={date}&to={date}&apikey={apikey}"
     response = urlopen(url, context=ssl_context)
     data = response.read().decode("utf-8")
     stuff=json.loads(data)
