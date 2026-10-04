@@ -5548,8 +5548,10 @@ Payment Date: This is the date on which the dividend is actually paid to the eli
 shareholders. It is the day when the dividend amount is credited to the shareholders' 
 accounts or mailed out as physical checks.    
 
-trailYield:  rolling last 4 dividends
-currYield:  last dividend x 4
+trailYield:  dividends paid in the trailing year / ex-date close
+curYield:  dividend x payments per year (freq, from the gap since the prior ex-date) / ex-date close
+
+Yields at today's price are in newdf.attrs: 'priceNow', 'trailYieldNow', 'curYieldNow'.
     '''
 
     url='https://financialmodelingprep.com/api/v3/historical-price-full/stock_dividend/'+sym+'?apikey='+apikey
@@ -5567,16 +5569,31 @@ currYield:  last dividend x 4
 
 
     df['trail'] = df.adjDividend.rolling(window='359D').sum()
+
+    # payments per year, from the gap to the previous ex-date snapped to
+    # annual/semi/quarterly/monthly; picks up a frequency change immediately
+    # (a trailing-year count lags it by a year)
+    gap = df.index.to_series().diff().dt.days.bfill()
+    std = np.array([1, 2, 4, 12])
+    df['freq'] = [std[np.abs(np.log(std) - np.log(365.25/g)).argmin()] if g > 0 else np.nan
+                  for g in gap]
+
     price=fmp_price(sym, start=df.index[0].strftime('%Y-%m-%d'))
     price.index = pd.to_datetime(price.index)
     newdf = pd.concat([df,price.reindex(df.index)], axis=1)
     newdf['trailYield']= np.round(newdf.trail/newdf.close*100,2)
+    newdf['curYield']= np.round(newdf.adjDividend*newdf.freq/newdf.close*100,2)
 
-    num = df['dividend'].rolling(window='360D').count().iloc[-1]
+    # yields at the latest close rather than the ex-date close; ignores
+    # declared dividends whose ex-date is still in the future
+    last_close = price['close'].dropna()
+    asof = last_close.index[-1]
+    last_close = last_close.iloc[-1]
+    paid = df[df.index <= asof]
+    newdf.attrs['priceNow'] = last_close
+    newdf.attrs['trailYieldNow'] = np.round(paid.adjDividend[paid.index > asof - pd.Timedelta('359D')].sum()/last_close*100,2)
+    newdf.attrs['curYieldNow'] = np.round(paid.adjDividend.iloc[-1]*paid.freq.iloc[-1]/last_close*100,2)
 
-    newdf['curYield']= np.round(newdf.adjDividend*num/newdf.close*100,2)
-
-    
     return newdf
 
 #---------------------------------------------------------------------------------------	
