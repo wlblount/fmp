@@ -5572,7 +5572,7 @@ currYield:  last dividend x 4
     newdf = pd.concat([df,price.reindex(df.index)], axis=1)
     newdf['trailYield']= np.round(newdf.trail/newdf.close*100,2)
 
-    num = df['dividend'].rolling(window='360D').count()[-1]
+    num = df['dividend'].rolling(window='360D').count().iloc[-1]
 
     newdf['curYield']= np.round(newdf.adjDividend*num/newdf.close*100,2)
 
