@@ -5597,6 +5597,31 @@ Yields at today's price are in newdf.attrs: 'priceNow', 'trailYieldNow', 'curYie
     return newdf
 
 #---------------------------------------------------------------------------------------	
+def _idx_prices(syms, start, end, fac):
+    """Common-date price panel for fmp_idx (both routes)."""
+    raw = fmp_priceLoop(syms, start=start, end=end, fac=fac)
+    missing = [s for s in syms if s not in raw.columns]
+    if missing:
+        raise ValueError(f"no price data returned for: {missing} -- check "
+                         "ticker spelling / FMP coverage")
+    raw = raw[syms]
+    px = raw.dropna()
+    if px.empty:
+        raise ValueError("no common dates across syms")
+    # dropna() cuts the window to the latest first date and the earliest last
+    # date of any constituent. The end-side cut (delisting/takeout) was silent,
+    # so log it like the short/'once' warning: stderr, not gated by verbose.
+    last = raw.apply(pd.Series.last_valid_index)
+    short = last[last < raw.index[-1]]
+    if len(short):
+        logging.getLogger(__name__).warning(
+            "fmp_idx: window TRUNCATED to %s (data runs to %s) because these "
+            "constituents end early: %s. Drop them or handle them explicitly.",
+            px.index[-1].date(), raw.index[-1].date(),
+            {s: str(d.date()) for s, d in short.items()})
+    return px
+
+
 def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01', name='idx', return_stream=False, end=None, verbose=True):
     '''
        syms: list of symbols (no duplicates)
@@ -5685,6 +5710,9 @@ def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01'
            effective_start: pd.Timestamp of the first REAL price bar used
                             (the latest common first date across syms).
            effective_end:   pd.Timestamp of the last price bar used.
+                            The window ENDS at the earliest last date across
+                            syms: a delisted constituent truncates the whole
+                            basket (logged as a WARNING, not gated by verbose).
            syms, weights:   the constituent list and the weights actually applied.
          bt route:          plain attributes -> res.effective_start, res.syms, ...
          return_stream:     DataFrame.attrs  -> df.attrs['effective_start'], ...
@@ -5749,11 +5777,7 @@ def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01'
     # weighted daily return directly, so it never crosses zero and is immune to
     # the constant-share leverage drift that corrupts the bt NAV path.
     if return_stream:
-        px = fmp_priceLoop(syms, start=start, end=end, fac=fac).dropna()
-        missing = [s for s in syms if s not in px.columns]
-        if missing:
-            raise ValueError(f"no price data returned for: {missing} -- check "
-                             "ticker spelling / FMP coverage")
+        px = _idx_prices(syms, start, end, fac)
         rets = px[syms].pct_change().dropna()
         w = pd.Series(dict(zip(syms, weights)))
         port_ret = rets.mul(w, axis=1).sum(axis=1)
@@ -5822,11 +5846,7 @@ def fmp_idx(syms, weights=None, rebal='once', fac='adjClose', start='1980-01-01'
 
     rebal_per = rebal_mapping[rebal]
 
-    px = fmp_priceLoop(syms, start=start, end=end, fac=fac).dropna()
-    missing = [s for s in syms if s not in px.columns]
-    if missing:
-        raise ValueError(f"no price data returned for: {missing} -- check "
-                         "ticker spelling / FMP coverage")
+    px = _idx_prices(syms, start, end, fac)
 
     _say('First available data is ' + str(px.index[0].date()) +
          '  |  last: ' + str(px.index[-1].date()))
