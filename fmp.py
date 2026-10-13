@@ -5415,26 +5415,58 @@ def fmp_earnDateNext(sym):
         return 'NA'
 
 #----------------------------------------------------------------------------------
-def fmp_earnCal(start=str(dt.datetime.now().date()), end=str(dt.datetime.now().date())):
+def fmp_earnCal(start=None, end=None, us_only=True, min_mcap=100):
     '''
-    input: start and end dates like 'XXXX-xx-xx'
-    returns: a dataframe of symbols with date, time and estimates where available
-    
-    '''
-    earnurl='https://financialmodelingprep.com/api/v3/earning_calendar?from='+start+'&to='+end+'&apikey='+apikey
-    response = urlopen(earnurl, context=ssl_context)
-    data = response.read().decode("utf-8")
-    stuff=json.loads(data)
-    df=pd.DataFrame(stuff).iloc[:,0:5]
-    df.set_index('symbol', inplace=True)
+    Earnings calendar for a date range, joined with live quote data.
 
-####  having trouble concatting prof df and df  #######    
-    
-#    df.date=pd.to_datetime(df.date)
-#    name = fmp_prof(df.index.tolist(), facs=['companyName', 'industry', 'mktCap'])
-#    fin =  pd.concat([name,df], axis=1)
-#    fin.sort_values(['date', 'time'], inplace=True, ascending=[True, False])
-    return df
+    input:  start, end : 'YYYY-MM-DD' (default today; end defaults to start)
+            us_only    : keep only NYSE/NASDAQ/AMEX common shares -- drops
+                         OTC/foreign listings and preferreds (JPM-PM etc.),
+                         which FMP tags with the parent's earnings
+            min_mcap   : minimum market cap in $Mil (us_only=True only)
+    returns: DataFrame indexed by symbol, sorted by date, bmo before amc,
+             then mcap. Columns: date, time, name, exchange, mcap(Mil),
+             fiscalDateEnding
+
+    Notes:  FMP silently truncates wide ranges, so the range is fetched in
+            7-day chunks. 'time' is often blank for unconfirmed dates.
+    '''
+    start = pd.Timestamp(start or dt.date.today())
+    end = pd.Timestamp(end) if end else start
+    if end < start:
+        start, end = end, start
+
+    rows = []
+    for s in pd.date_range(start, end, freq='7D'):
+        e = min(s + pd.Timedelta(days=6), end)
+        url = (f'https://financialmodelingprep.com/api/v3/earning_calendar?from={s:%Y-%m-%d}'
+               f'&to={e:%Y-%m-%d}&apikey={apikey}')
+        rows += json.loads(urlopen(url, context=ssl_context).read().decode("utf-8"))
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows).drop_duplicates(['symbol', 'date'])
+    df = df[df['date'].between(f'{start:%Y-%m-%d}', f'{end:%Y-%m-%d}')]
+    if us_only:
+        df = df[~df['symbol'].str.contains(r'-P[A-Z]*$|\.', regex=True)]
+
+    # quote join: name, exchange, mcap
+    syms = df['symbol'].unique().tolist()
+    q = []
+    for i in range(0, len(syms), 100):
+        url = f"https://financialmodelingprep.com/api/v3/quote/{','.join(syms[i:i+100])}?apikey={apikey}"
+        q += json.loads(urlopen(url, context=ssl_context).read().decode("utf-8"))
+    q = pd.DataFrame(q, columns=['symbol', 'name', 'exchange', 'marketCap'])
+    df = df.merge(q, on='symbol', how='left')
+    df['mcap(Mil)'] = (df.pop('marketCap') / 1e6).round(0)
+
+    if us_only:
+        df = df[df['exchange'].isin(['NYSE', 'NASDAQ', 'AMEX']) & (df['mcap(Mil)'] >= min_mcap)]
+
+    df['_t'] = df['time'].map({'bmo': 0, 'amc': 1}).fillna(2)
+    df = df.sort_values(['date', '_t', 'mcap(Mil)'], ascending=[True, True, False])
+    cols = ['date', 'time', 'name', 'exchange', 'mcap(Mil)', 'fiscalDateEnding']
+    return df.set_index('symbol')[cols]
 #----------------------------------------------------------------------------------
 
 def fmp_earnEst(sym, period='quarter'):
