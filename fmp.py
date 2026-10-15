@@ -4977,6 +4977,50 @@ def fmp_shares(sym, facs=['outstandingShares']):
     except (IndexError, KeyError, TypeError):
         return pd.DataFrame(columns=facs)
 #------------------------------------------------------
+###10/15/26
+
+def fmp_floatMulti(syms, max_workers=5):
+    '''
+    Current float for a list of symbols, fetched in parallel from the FMP
+    "stable" shares-float endpoint (one call per symbol).
+
+    Meant for short lists (e.g. a screen's top 50-100). The API key is
+    rate-limited per minute, so keep max_workers low; a 429 is retried once
+    after a pause, and symbols that still fail come back as NaN.
+
+    Returns DataFrame indexed by symbol:
+        floatShares, outstandingShares, freeFloat (% of outstanding), date
+    '''
+    if isinstance(syms, str):
+        syms = [syms]
+    syms = list(dict.fromkeys(s.upper() for s in syms))
+    cols = ['floatShares', 'outstandingShares', 'freeFloat', 'date']
+
+    def fetch_single_symbol(sym):
+        url = 'https://financialmodelingprep.com/stable/shares-float'
+        for attempt in range(2):
+            r = requests.get(url, params={'symbol': sym, 'apikey': apikey}, timeout=30)
+            if r.status_code == 429 and attempt == 0:
+                time.sleep(30)
+                continue
+            if r.status_code != 200:
+                return sym, None
+            stuff = r.json()
+            return sym, (stuff[0] if stuff else None)
+        return sym, None
+
+    rows = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for sym, rec in executor.map(fetch_single_symbol, syms):
+            rows[sym] = {c: (rec or {}).get(c) for c in cols}
+
+    df = pd.DataFrame.from_dict(rows, orient='index', columns=cols)
+    df[cols[:3]] = df[cols[:3]].apply(pd.to_numeric, errors='coerce')
+    df.loc[df['floatShares'] <= 0, 'floatShares'] = np.nan
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df.index.name = 'symbol'
+    return df
+#------------------------------------------------------
 ###01/20/26 8:01 AM
 
 def fmp_entts(sym, freq='Q', limit=40):

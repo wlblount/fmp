@@ -146,6 +146,10 @@ period = quarter, year
 Function: fmp_filings
 Docstring: None
 ----------------------------------------
+Function: fmp_floatMulti
+Docstring: Current float for a list of symbols (FMP stable shares-float, one call each, in parallel).
+Meant for short lists (~50-100). Returns DataFrame indexed by symbol: floatShares, outstandingShares, freeFloat (%), date
+----------------------------------------
 Function: fmp_growth
 Docstring: "revenueGrowth",
 "grossProfitGrowth",
