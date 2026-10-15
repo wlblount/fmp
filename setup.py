@@ -1,9 +1,9 @@
-from setuptools import setup, find_packages
+from setuptools import setup
 
 setup(
     name='fmp',
     version='0.1',
-    packages=find_packages(),
+    py_modules=['fmp'],
     install_requires=[
         'certifi',
         'requests',
@@ -12,7 +12,8 @@ setup(
         'matplotlib',
         'tqdm',
         'scikit-learn',
-        'python-dotenv'
+        'python-dotenv',
+        'ipython',
     ],
     author='BillBlount',
     author_email='',
