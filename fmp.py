@@ -5513,6 +5513,58 @@ def fmp_earnCal(start=None, end=None, us_only=True, min_mcap=100):
     return df.set_index('symbol')[cols]
 #----------------------------------------------------------------------------------
 
+def fmp_ipoCal(start=None, end=None, common_only=True):
+    '''
+    IPO calendar for a date range: expected and priced deals.
+
+    input:  start, end  : 'YYYY-MM-DD' (default today-30 .. today+30)
+            common_only : drop rows that aren't an issuer's common stock --
+                          ETFs, funds, trusts, preferreds, notes, warrants,
+                          rights, units and when-issued lines. SPAC common
+                          shares are kept.
+    returns: DataFrame indexed by symbol, sorted by date. Columns: date,
+             actions ('Expected' / 'Priced' / ...), company, exchange,
+             shares, priceLow, priceHigh, dealSize(Mil), mcap(Mil)
+
+    Notes:  FMP silently truncates wide ranges (135 days came back as 4
+            rows, 60 days as the full list), so the range is fetched in
+            30-day chunks. Deals only appear a few days before pricing;
+            priceLow/High are blank for most small caps and once priced.
+    '''
+    start = pd.Timestamp(start or dt.date.today() - timedelta(days=30))
+    end = pd.Timestamp(end or dt.date.today() + timedelta(days=30))
+    if end < start:
+        start, end = end, start
+
+    rows = []
+    for s in pd.date_range(start, end, freq='30D'):
+        e = min(s + pd.Timedelta(days=29), end)
+        r = requests.get('https://financialmodelingprep.com/stable/ipos-calendar',
+                         params={'from': f'{s:%Y-%m-%d}', 'to': f'{e:%Y-%m-%d}', 'apikey': apikey}, timeout=30)
+        stuff = r.json() if r.status_code == 200 else []
+        rows += stuff if isinstance(stuff, list) else []
+    cols = ['date', 'actions', 'company', 'exchange', 'shares', 'priceLow', 'priceHigh', 'dealSize(Mil)', 'mcap(Mil)']
+    if not rows:
+        return pd.DataFrame(columns=cols)
+
+    df = pd.DataFrame(rows).drop_duplicates(['symbol', 'date', 'actions'])
+    df = df[df['symbol'].notna() & (df['symbol'] != '')]
+    if common_only:
+        df = df[~df['company'].fillna('').str.contains(
+            r'\b(?:ETF|Fund|Trust|Portfolio|Preferred|Notes?|Debentures?|Warrants?|Wt|Rights?|Units?|When-Issued)\b'
+            r'|\d+(?:\.\d+)?%', case=False, regex=True)]
+
+    # '15.00 - 17.00' (or a single price) -> low / high
+    rng = df['priceRange'].fillna('').str.findall(r'\d+(?:\.\d+)?')
+    df['priceLow'] = pd.to_numeric(rng.str[0], errors='coerce')
+    df['priceHigh'] = pd.to_numeric(rng.str[-1], errors='coerce')
+    df['dealSize(Mil)'] = (pd.to_numeric(df['dealSize'], errors='coerce') / 1e6).round(1)
+    df['mcap(Mil)'] = (pd.to_numeric(df['marketCap'], errors='coerce') / 1e6).round(0)
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    df = df.sort_values(['date', 'symbol'])
+    return df.set_index('symbol')[cols]
+#----------------------------------------------------------------------------------
+
 def fmp_earnEst(sym, period='quarter'):
     '''
     inputs: symbol as str

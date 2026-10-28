@@ -332,6 +332,11 @@ Docstring: sym = single symbol as a string (not case sensitive)
 period = '1day' returns:  'adjClose', 'change', 'changeOverTime', 'changePercent', 'close','high', 'label', 'low', 'open', 'unadjustedVolume', 'volume', 'vwap'
 period = '1min', '5min', '15min', '30min', '1hour' returns:  'close', 'high', 'low', 'open', 'volume'
 ----------------------------------------
+Function: fmp_ipoCal
+Docstring: IPO calendar (FMP stable ipos-calendar) for start..end 'YYYY-MM-DD' (default today-30 .. today+30), fetched in 30-day chunks (FMP truncates wide ranges).
+common_only=True drops ETFs, funds, trusts, preferreds, notes, warrants, rights, units, when-issued lines.
+Returns DataFrame indexed by symbol: date, actions (Expected/Priced), company, exchange, shares, priceLow, priceHigh, dealSize(Mil), mcap(Mil)
+----------------------------------------
 Function: fmp_isActive
 Docstring: input: a string or a list of strings / symbols
 prints the symbol if not actively trading or not in the FMP system
